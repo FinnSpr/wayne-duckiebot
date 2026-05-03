@@ -1,11 +1,16 @@
 # How to run this code on a virtual duckiebot
 - Navigate to the root of this project
+- Make the ros_communication script executable: `chmod +x ./packages/my_package/src/ros_communication.py`
 - Create and start virtual duckiebot with name `ROBOT_NAME`
 - Run matrix on custom map: `dts matrix run --standalone --map custom_map`
 - Attach bot to matrix: `dts matrix attach ROBOT_NAME map_0/vehicle_0`
 - Build: `dts devel build -f`
 - Run while connecting to the bot's ROS network: `dts devel run -R ROBOT_NAME`
 - You can now observe the robot's behavior in the matrix window
+
+# Debugging
+- Type `dts gui --vnc ROBOT_NAME` and open the image viewer to get a graphical view of
+certain aspects (e.g., lane detection) which are published to corresponding ROS nodes.
 
 # Template
 This repo is based on the [template-ros](https://github.com/duckietown/template-ros/) Duckietown template.
