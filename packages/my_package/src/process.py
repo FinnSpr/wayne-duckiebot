@@ -19,7 +19,7 @@ import time
 class State(Enum):
     DRIVE = 1
     STOP = 2
-    DECIDE = 3
+    FOLLOW = 3
     CROSS = 4
 
 state = State.DRIVE
@@ -29,7 +29,12 @@ def print_state():
 print_state()
 
 state_entered_at = time.time()
-previous_crossing_decision_point = None
+
+crossing_decision = False
+crossing_vel_left = 0.0
+crossing_vel_right = 0.0
+decision_waypoint = None
+decision = None
 
 
 # ─────────────────────────────────────────────
@@ -63,12 +68,26 @@ X_TOLERANCE = 5
 Y_TOLERANCE = 5
 
 # Minimum area for a red stop line to be treated as such
-MIN_AREA = 50  # ignore small noise blobs
+MIN_AREA = 200  # ignore small noise blobs
+
+# Horizontal vs. vertical angle threshold
+ANGLE_THRESHOLD = 5
+
+# y threshold for cutting the front stop line(s)
+CUT_FRONT_STOP_LINE = 400
+
+# left vs right x thresholds for assigning detected stop lines
+LEFT_VS_RIGHT = 320
 
 # Offset between stop marking and target point (lane) when crossing an intersection
-CROSSING_OFFSET_TOP = np.array([130, 0])
-CROSSING_OFFSET_LEFT = np.array([-80, -150])
-CROSSING_OFFSET_RIGHT = np.array([80, 150])
+CROSSING_OFFSET_TOP = np.array([110, 0])
+CROSSING_OFFSET_LEFT = np.array([160, -350])
+CROSSING_OFFSET_RIGHT = np.array([200, -140])
+
+# Times for the state transition (in s)
+STOP_TIME = 1
+FOLLOW_TIME = [4, 3, 2] # left, top, right
+CROSS_TIME = 1.5
 
 # ─────────────────────────────────────────────
 # COLOR FILTERING
@@ -199,24 +218,38 @@ def compute_waypoints(
         # stats columns: LEFT, TOP, WIDTH, HEIGHT, AREA
 
         lines = []
-        for label in range(1, num_labels):  # skip background (label 0)
+        for label in range(1, num_labels):
             area = stats[label, cv2.CC_STAT_AREA]
             if area < MIN_AREA:
                 continue
 
+            # Get all pixels belonging to this component
+            component_pixels = np.column_stack(np.where(labels == label))  # (row, col) = (y, x)
+            points = component_pixels[:, ::-1].astype(np.float32)          # flip to (x, y)
+            # Fit a rotated bounding box → gives angle
+            _, _, angle = cv2.minAreaRect(points)
+            # angle is in [-90, 0), if close to -90 or 0, it is horizontal
+            orientation = "vertical" if min(np.abs(angle), angle + 90) > ANGLE_THRESHOLD else "horizontal"
+            
             cx = int(centroids[label][0])
             cy = int(centroids[label][1])
-            lines.append([cx, cy])
+            lines.append([cx, cy, orientation, angle, area])
+
+        # Keep only the five largest (the front line may be separated into two)
+        lines = sorted(lines, key=lambda l: l[3], reverse=True)[:5]
+
+        # Drop the area column, no longer needed
+        lines = [l[:4] for l in lines]
 
         if len(lines) > 0:
             point_to_stop_line = True
 
-            if state == State.DECIDE:
+            if state == State.FOLLOW:
                 waypoints = compute_crossing_waypoint(lines, image_height, image_width)
             elif state == State.CROSS:
                 point_to_stop_line = False
             else:
-                waypoints = compute_stop_line_waypoint(lines)
+                waypoints = compute_stop_line_waypoint(lines, image_height, image_width)
     
     if not point_to_stop_line:
         if white_spline is not None and yellow_spline is not None:
@@ -264,41 +297,59 @@ def compute_crossing_waypoint(lines, image_height, image_width):
     Returns:
         (cx, cy) center of a randomly chosen far stop line, or None if not found
     """
-    global previous_crossing_decision_point
+    global crossing_decision, decision_waypoint, decision
 
-    # ── Step 2: Identify the closest stop line ──
-    current_line = max(lines, key=lambda l: l[1])
-
-    # ── Step 3: Collect all other stop lines ─────────────────────────────────
-    other_lines = [l for l in lines if l is not current_line]
+    other_lines = [l for l in lines if l[1] < CUT_FRONT_STOP_LINE]
 
     if not other_lines:
         return None
 
-    # ── Step 4: Pick a random one and return its center ──────────────────────
-    if previous_crossing_decision_point is None:
-        chosen = random.choice(other_lines)
-    else:
-        chosen = min(other_lines, key=lambda l: (previous_crossing_decision_point[0] - l[0])**2 + (previous_crossing_decision_point[1] - l[1])**2)
-    previous_crossing_decision_point = chosen
+    # Use orientation and minimum/maximum info to get the right direction of the other lines
+    vertical_other_lines_left = [l for l in other_lines if l[2] == "vertical" and l[0] < LEFT_VS_RIGHT]
+    vertical_other_lines_right = [l for l in other_lines if l[2] == "vertical" and l[0] >= LEFT_VS_RIGHT]
+    horizontal_other_lines = [l for l in other_lines if l[2]  == "horizontal"]
 
-    # Calculate the estimated position next to the chosen stop line
-    top_line   = min(lines, key=lambda l: l[1])   # smallest cy → highest up
-    left_line  = min(lines, key=lambda l: l[0])   # smallest cx → leftmost
+    choices = {}
+    if len(horizontal_other_lines) == 1:
+        choices["straight"] = horizontal_other_lines[0]
+    if len(vertical_other_lines_left) == 1:
+        choices["left"] = vertical_other_lines_left[0]
+    if len(vertical_other_lines_right) == 1:
+        choices["right"] = vertical_other_lines_right[0]
+    # first try assigning the safe lines which are likely correct (orientation, number, position)
+    # only if none is safe, take more risky detections
+    if not choices:
+        if len(horizontal_other_lines) > 1:
+            choices["straight"] = horizontal_other_lines[0]
+        if len(vertical_other_lines_left) > 1:
+            choices["left"] = vertical_other_lines_left[0]
+        if len(vertical_other_lines_right) > 1:
+            choices["right"] = vertical_other_lines_right[0]
+    
+    print("\n------Possible Destinations------")
+    for key, value in choices.items():
+        print(f"{key}: {value}")
+    print("")
 
-    if chosen == top_line:
-        target = np.array(chosen) + CROSSING_OFFSET_TOP
-    elif chosen == left_line:
-        target = np.array(chosen) + CROSSING_OFFSET_LEFT
-    else: # right line
-        target = np.array(chosen) + CROSSING_OFFSET_RIGHT
+    decision, chosen = random.choice(list(choices.items()))
+
+    if decision == "straight":
+        target = np.array(chosen[:2]) + CROSSING_OFFSET_TOP
+    elif decision == "left":
+        target = np.array(chosen[:2]) + CROSSING_OFFSET_LEFT
+    elif decision == "right":
+        target = np.array(chosen[:2]) + CROSSING_OFFSET_RIGHT
+    
+    print(f"Decision: {decision}\n")
 
     x = int(np.clip(target[0], 0, image_width))
     y = int(np.clip(target[1], 0, image_height))
 
-    return np.array([[x, y]])
+    crossing_decision = True
+    decision_waypoint = np.array([[x, y]])
+    return decision_waypoint
 
-def compute_stop_line_waypoint(lines):
+def compute_stop_line_waypoint(lines, image_height, image_width):
     """
     Finds the horizontal red halting line closest to the car (highest y)
     and returns the center point of that line.
@@ -309,7 +360,7 @@ def compute_stop_line_waypoint(lines):
         (cx, cy) center of the halting line, or None if not found
     """
     # ── Step 2: Identify the closest stop line ──
-    current_line = max(lines, key=lambda l: l[1])  # max cy
+    current_line = max([l for l in lines if l[2] == "horizontal"], key=lambda l: l[1], default=[int(image_width/2), 0])  # max cy
     return np.array([[current_line[0], current_line[1]]])
 
 
@@ -358,6 +409,8 @@ def heading_to_wheel_commands(heading_error: float) -> Tuple[float, float]:
     Returns:
         (vel_left, vel_right): wheel velocities in [0, 1]
     """
+    global crossing_vel_left, crossing_vel_right
+
     if state == State.STOP:
         vel_left = 0
         vel_right = 0
@@ -371,6 +424,9 @@ def heading_to_wheel_commands(heading_error: float) -> Tuple[float, float]:
     # Clamp to valid range
     vel_left  = float(np.clip(vel_left,  -1.0, 1.0))
     vel_right = float(np.clip(vel_right, -1.0, 1.0))
+
+    crossing_vel_left = vel_left
+    crossing_vel_right = vel_right
 
     return vel_left, vel_right
 
@@ -404,27 +460,35 @@ def visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spl
     return vis
 
 def state_transition(red_mask):
+    
     def change_state(s: State):
-        global state, state_entered_at, previous_crossing_decision_point
+        global state, state_entered_at, crossing_decision
         state = s
         state_entered_at = time.time()
-        previous_crossing_decision_point = None
+        crossing_decision = False
         print_state()
     
-    def time_passed():
-        return time.time() - state_entered_at
+    def time_passed(t):
+        return time.time() - state_entered_at >= t
 
     if state == State.DRIVE:
         if not np.all(red_mask[STOP_MARKER_Y:, :] == 0):
             change_state(State.STOP)
     if state == State.STOP:
-        if time_passed() > 1:
-            change_state(State.DECIDE)
-    if state == State.DECIDE:
-        if time_passed() > 3:
+        if time_passed(STOP_TIME):
+            change_state(State.FOLLOW)
+    if state == State.FOLLOW:
+        t = 0
+        if decision == "left":
+            t = FOLLOW_TIME[0]
+        elif decision == "straight":
+            t = FOLLOW_TIME[1]
+        else:
+            t = FOLLOW_TIME[2]
+        if time_passed(t):
             change_state(State.CROSS)
     if state == State.CROSS:
-        if time_passed() > 4:
+        if time_passed(CROSS_TIME):
             change_state(State.DRIVE)
 
 def process_all(data) -> Tuple[float, float]:
@@ -459,23 +523,30 @@ def process_all(data) -> Tuple[float, float]:
     white_spline  = fit_spline(white_mask, take_leftmost_pixels=True)
     yellow_spline = fit_spline(yellow_mask, take_leftmost_pixels=False)
 
-    waypoints = compute_waypoints(white_spline, yellow_spline, red_mask, image_height, image_width)
+    if not crossing_decision:
+        waypoints = compute_waypoints(white_spline, yellow_spline, red_mask, image_height, image_width)
 
-    if waypoints is None:
-        # No lane detected at all — stop safely
-        visualization = visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, None)
-        return 0.0, 0.0, visualization 
+        if waypoints is None:
+            # No lane detected at all — stop safely
+            visualization = visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, None)
+            return 0.0, 0.0, visualization 
 
-    # ── Step 4: Heading error ────────────────────
-    heading_error = estimate_heading_error(waypoints, image_width)
+        # ── Step 4: Heading error ────────────────────
+        heading_error = estimate_heading_error(waypoints, image_width)
 
-    # ── Step 5: Wheel commands ───────────────────
-    vel_left, vel_right = heading_to_wheel_commands(heading_error)
+        # ── Step 5: Wheel commands ───────────────────
+        vel_left, vel_right = heading_to_wheel_commands(heading_error)
+    else:
+        vel_left = crossing_vel_left
+        vel_right = crossing_vel_right
+        waypoints = decision_waypoint
 
     # ── Visualization ────────────────────────────
     visualization = visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, waypoints)
 
     return vel_left, vel_right, visualization
+
+
 
 
 # import cv2
