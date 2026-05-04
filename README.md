@@ -11,6 +11,7 @@
 # Debugging
 - Type `dts gui --vnc ROBOT_NAME` and open the image viewer to get a graphical view of
 certain aspects (e.g., lane detection) which are published to corresponding ROS nodes.
+- Sometimes, the ROS communication stops working. In this case, restart the robot.
 
 # Template
 This repo is based on the [template-ros](https://github.com/duckietown/template-ros/) Duckietown template.
