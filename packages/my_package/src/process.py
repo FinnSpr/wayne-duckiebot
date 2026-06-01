@@ -21,6 +21,7 @@ class State(Enum):
     STOP = 2
     FOLLOW = 3
     CROSS = 4
+    TURN = 5
 
 state = State.DRIVE
 
@@ -29,6 +30,7 @@ def print_state():
 print_state()
 
 state_entered_at = time.time()
+time_last_waypoint = time.time()
 
 crossing_decision = False
 crossing_vel_left = 0.0
@@ -88,6 +90,10 @@ CROSSING_OFFSET_RIGHT = np.array([200, -140])
 STOP_TIME = 1
 FOLLOW_TIME = [4, 3, 2] # left, top, right
 CROSS_TIME = 1.5
+
+WAIT_UNTIL_TURN_TIME = 3
+TURN_TIME = 1.8
+TURN_SPEED_RIGHT_WHEEL = 0.4
 
 # ─────────────────────────────────────────────
 # COLOR FILTERING
@@ -470,9 +476,15 @@ def state_transition(red_mask):
     
     def time_passed(t):
         return time.time() - state_entered_at >= t
+    
+    def no_waypoint_passed(t):
+        global time_last_waypoint
+        return time.time() - time_last_waypoint >= t
 
     if state == State.DRIVE:
-        if not np.all(red_mask[STOP_MARKER_Y:, :] == 0):
+        if no_waypoint_passed(WAIT_UNTIL_TURN_TIME):
+            change_state(State.TURN)
+        elif not np.all(red_mask[STOP_MARKER_Y:, :] == 0):
             change_state(State.STOP)
     if state == State.STOP:
         if time_passed(STOP_TIME):
@@ -489,6 +501,9 @@ def state_transition(red_mask):
             change_state(State.CROSS)
     if state == State.CROSS:
         if time_passed(CROSS_TIME):
+            change_state(State.DRIVE)
+    if state == State.TURN:
+        if time_passed(TURN_TIME):
             change_state(State.DRIVE)
 
 def process_all(data) -> Tuple[float, float]:
@@ -508,6 +523,8 @@ def process_all(data) -> Tuple[float, float]:
     Returns:
         (vel_left, vel_right): wheel velocities in [0, 1]
     """
+    global time_last_waypoint
+
     image = data._image
     image_height, image_width = image.shape[:2]
 
@@ -529,6 +546,9 @@ def process_all(data) -> Tuple[float, float]:
         if waypoints is None:
             # No lane detected at all — stop safely
             visualization = visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, None)
+            if state == State.TURN:
+                time_last_waypoint = time.time()
+                return 0.0, TURN_SPEED_RIGHT_WHEEL, visualization
             return 0.0, 0.0, visualization 
 
         # ── Step 4: Heading error ────────────────────
@@ -540,6 +560,8 @@ def process_all(data) -> Tuple[float, float]:
         vel_left = crossing_vel_left
         vel_right = crossing_vel_right
         waypoints = decision_waypoint
+
+    time_last_waypoint = time.time()
 
     # ── Visualization ────────────────────────────
     visualization = visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, waypoints)
