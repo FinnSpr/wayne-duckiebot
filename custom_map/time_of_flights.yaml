@@ -5,3 +5,8 @@ time_of_flights:
     angle: 0.4363
     maximum_distance: 1.2
     frequency: 15
+  map_0/vehicle_1/tof_front_center:
+    name: front_center
+    angle: 0.4363
+    maximum_distance: 1.2
+    frequency: 15

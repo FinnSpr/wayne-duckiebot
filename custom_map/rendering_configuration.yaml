@@ -5,3 +5,8 @@ rendering_configuration:
     hdr: false
     anti_aliasing: true
     shadows: true
+  map_0/vehicle_1/camera_0:
+    lens_distortion: true
+    hdr: false
+    anti_aliasing: true
+    shadows: true

@@ -4,3 +4,7 @@ vehicle_dynamics:
     commands_delay: 0.0
     motor_constant_right: 27.0
     motor_constant_left: 27.0
+  map_0/vehicle_1:
+    commands_delay: 0.0
+    motor_constant_right: 27.0
+    motor_constant_left: 27.0

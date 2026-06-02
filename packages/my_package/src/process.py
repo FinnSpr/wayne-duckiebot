@@ -37,6 +37,7 @@ crossing_vel_left = 0.0
 crossing_vel_right = 0.0
 decision_waypoint = None
 decision = None
+intersection_admitted = False
 
 
 # ─────────────────────────────────────────────
@@ -95,6 +96,8 @@ WAIT_UNTIL_TURN_TIME = 3
 TURN_TIME = 1.8
 TURN_SPEED_RIGHT_WHEEL = 0.4
 
+PROXIMITY_OTHER_VEHICLES_TO_RED_LINE = 50
+
 # ─────────────────────────────────────────────
 # COLOR FILTERING
 # ─────────────────────────────────────────────
@@ -112,6 +115,9 @@ RED_HSV_LOWER_1 = np.array([  0,  80, 100])
 RED_HSV_UPPER_1 = np.array([ 10, 255, 255])
 RED_HSV_LOWER_2 = np.array([160,  80, 100])
 RED_HSV_UPPER_2 = np.array([180, 255, 255])
+
+BLUE_HSV_LOWER = np.array([  110,  200, 20])
+BLUE_HSV_UPPER = np.array([  130,  255, 255])
 
 
 def filter_lane_colors(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -465,13 +471,83 @@ def visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spl
 
     return vis
 
+def can_intersect(image, red_mask):
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, BLUE_HSV_LOWER, BLUE_HSV_UPPER)
+    h, w = mask.shape
+
+    # ── Step 1: Find connected components (individual stop lines) ────────────
+    binary = (red_mask > 0).astype(np.uint8)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary)
+    # stats columns: LEFT, TOP, WIDTH, HEIGHT, AREA
+
+    lines = []
+    for label in range(1, num_labels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area < MIN_AREA:
+            continue
+
+        # Get all pixels belonging to this component
+        component_pixels = np.column_stack(np.where(labels == label))  # (row, col) = (y, x)
+        points = component_pixels[:, ::-1].astype(np.float32)          # flip to (x, y)
+        # Fit a rotated bounding box → gives angle
+        _, _, angle = cv2.minAreaRect(points)
+        # angle is in [-90, 0), if close to -90 or 0, it is horizontal
+        orientation = "vertical" if min(np.abs(angle), angle + 90) > ANGLE_THRESHOLD else "horizontal"
+        
+        cx = int(centroids[label][0])
+        cy = int(centroids[label][1])
+        lines.append([cx, cy, orientation, angle, area])
+
+    # Keep only the five largest (the front line may be separated into two)
+    lines = sorted(lines, key=lambda l: l[3], reverse=True)[:5]
+
+    # Drop the area column, no longer needed
+    lines = [l[:4] for l in lines]
+
+    other_lines = [l for l in lines if l[1] < CUT_FRONT_STOP_LINE]
+
+    if not other_lines:
+        return True
+
+    proximity_mask = np.zeros((h, w), dtype=np.uint8)
+    for line in other_lines:
+        cx, cy = line[0], line[1]
+        cv2.circle(proximity_mask, (cx, cy), PROXIMITY_OTHER_VEHICLES_TO_RED_LINE, 255, thickness=-1)
+
+    # Only consider blue pixels that are near a centroid
+    nearby_blue = cv2.bitwise_and(mask, proximity_mask)
+
+    # ── Step 3: Check directional regions within that proximity mask ─────────
+    top_occupied   = bool(np.any(nearby_blue[:h // 2,        50:400      ]))
+    left_occupied  = bool(np.any(nearby_blue[100:,           :w // 3     ]))
+    right_occupied = bool(np.any(nearby_blue[:300,           w // 2: ]))
+
+    if decision == "left":
+        r = True
+        if right_occupied:
+            print("Waiting for right duckiebot...")
+            r = False
+        if top_occupied:
+            print("Waiting for top duckiebot...")
+            r = False
+        return r
+    elif decision == "straight":
+        if right_occupied:
+            print("Waiting for right duckiebot...")
+        return not right_occupied
+    else:
+        return True
+
+
 def state_transition(red_mask):
     
     def change_state(s: State):
-        global state, state_entered_at, crossing_decision
+        global state, state_entered_at, crossing_decision, intersection_admitted
         state = s
         state_entered_at = time.time()
         crossing_decision = False
+        intersection_admitted = False
         print_state()
     
     def time_passed(t):
@@ -556,10 +632,25 @@ def process_all(data) -> Tuple[float, float]:
 
         # ── Step 5: Wheel commands ───────────────────
         vel_left, vel_right = heading_to_wheel_commands(heading_error)
-    else:
-        vel_left = crossing_vel_left
-        vel_right = crossing_vel_right
-        waypoints = decision_waypoint
+
+    # we might have done a decision in the first clause and then we also want to jump into this clause right away
+    if crossing_decision:
+        # check if follow is admitted (obey traffic rules)
+        global intersection_admitted, state_entered_at
+        
+        if not intersection_admitted:
+            intersection_admitted = can_intersect(image, red_mask)
+
+        if intersection_admitted:
+            vel_left = crossing_vel_left
+            vel_right = crossing_vel_right
+            waypoints = decision_waypoint
+        else:
+            state_entered_at = time.time()
+            
+            vel_left = 0
+            vel_right = 0
+            waypoints = decision_waypoint
 
     time_last_waypoint = time.time()
 

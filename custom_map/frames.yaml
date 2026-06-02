@@ -318,3 +318,12 @@ frames:
       roll: 0.0
       pitch: 0.0
       yaw: 0.0
+  map_0/vehicle_1:
+    relative_to: ~
+    pose:
+      x: 0.4
+      y: 0.185
+      z: 0.0
+      roll: 0.0
+      pitch: 0.0
+      yaw: 0.0
