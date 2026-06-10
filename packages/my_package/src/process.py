@@ -12,6 +12,7 @@ from typing import Tuple, Optional
 import random
 from enum import Enum
 import time
+#from object_detection import ODModel
 
 
 # Finite State Machine
@@ -22,15 +23,18 @@ class State(Enum):
     FOLLOW = 3
     CROSS = 4
     TURN = 5
+    BLOCKED = 6
 
 state = State.DRIVE
 
 def print_state():
     print(state)
-print_state()
 
 state_entered_at = time.time()
 time_last_waypoint = time.time()
+prev_state = State.DRIVE
+blocked_state_last_time = None
+remained_in_blocked_state = 0.0
 
 crossing_decision = False
 crossing_vel_left = 0.0
@@ -98,6 +102,8 @@ TURN_SPEED_RIGHT_WHEEL = 0.4
 
 PROXIMITY_OTHER_VEHICLES_TO_RED_LINE = 50
 
+TOF_THRESHOLD = 0.2
+
 # ─────────────────────────────────────────────
 # COLOR FILTERING
 # ─────────────────────────────────────────────
@@ -119,6 +125,10 @@ RED_HSV_UPPER_2 = np.array([180, 255, 255])
 BLUE_HSV_LOWER = np.array([  110,  200, 20])
 BLUE_HSV_UPPER = np.array([  130,  255, 255])
 
+# ─────────────────────────────────────────────
+# OBJECT DETECTION
+# ─────────────────────────────────────────────
+#od_model = ODModel()
 
 def filter_lane_colors(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -543,15 +553,16 @@ def can_intersect(image, red_mask):
 def state_transition(red_mask):
     
     def change_state(s: State):
-        global state, state_entered_at, crossing_decision, intersection_admitted
+        global state, state_entered_at, crossing_decision, intersection_admitted, remained_in_blocked_state
         state = s
         state_entered_at = time.time()
         crossing_decision = False
         intersection_admitted = False
+        remained_in_blocked_state = 0.0
         print_state()
     
     def time_passed(t):
-        return time.time() - state_entered_at >= t
+        return time.time() - state_entered_at >= t + remained_in_blocked_state
     
     def no_waypoint_passed(t):
         global time_last_waypoint
@@ -599,10 +610,14 @@ def process_all(data) -> Tuple[float, float]:
     Returns:
         (vel_left, vel_right): wheel velocities in [0, 1]
     """
-    global time_last_waypoint
+    global time_last_waypoint, intersection_admitted, state_entered_at, state, prev_state, blocked_state_last_time, remained_in_blocked_state
 
     image = data._image
     image_height, image_width = image.shape[:2]
+
+    tof = data._tof
+
+    #print(od_model.stop_for_object(image))
 
     white_mask, yellow_mask, red_mask = filter_lane_colors(image)
 
@@ -636,7 +651,6 @@ def process_all(data) -> Tuple[float, float]:
     # we might have done a decision in the first clause and then we also want to jump into this clause right away
     if crossing_decision:
         # check if follow is admitted (obey traffic rules)
-        global intersection_admitted, state_entered_at
         
         if not intersection_admitted:
             intersection_admitted = can_intersect(image, red_mask)
@@ -654,12 +668,29 @@ def process_all(data) -> Tuple[float, float]:
 
     time_last_waypoint = time.time()
 
+    if state != State.BLOCKED:
+        if tof < TOF_THRESHOLD:
+            prev_state = state
+            state = State.BLOCKED
+            print_state()
+    if state == State.BLOCKED:
+        vel_left = 0
+        vel_right = 0
+        if blocked_state_last_time != None:
+            remained_in_blocked_state += time.time() - blocked_state_last_time
+        if tof > TOF_THRESHOLD:
+            state = prev_state
+            print_state()
+
     # ── Visualization ────────────────────────────
     visualization = visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, waypoints)
 
+    # we can safely overwrite this here, it works better because there is more time buffer
+    blocked_state_last_time = time.time()
+
     return vel_left, vel_right, visualization
 
-
+print_state()
 
 
 # import cv2
