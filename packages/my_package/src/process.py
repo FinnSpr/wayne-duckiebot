@@ -16,16 +16,21 @@ import time
 
 # Finite State Machine
 
+
 class State(Enum):
     DRIVE = 1
     STOP = 2
     FOLLOW = 3
     CROSS = 4
 
+
 state = State.DRIVE
+
 
 def print_state():
     print(state)
+
+
 print_state()
 
 state_entered_at = time.time()
@@ -86,7 +91,7 @@ CROSSING_OFFSET_RIGHT = np.array([200, -140])
 
 # Times for the state transition (in s)
 STOP_TIME = 1
-FOLLOW_TIME = [4, 3, 2] # left, top, right
+FOLLOW_TIME = [4, 3, 2]  # left, top, right
 CROSS_TIME = 1.5
 
 # ─────────────────────────────────────────────
@@ -94,17 +99,17 @@ CROSS_TIME = 1.5
 # ─────────────────────────────────────────────
 
 # HSV range for white lane markings
-WHITE_HSV_LOWER = np.array([0,   0,   180])
-WHITE_HSV_UPPER = np.array([180, 40,  255])
+WHITE_HSV_LOWER = np.array([0, 0, 180])
+WHITE_HSV_UPPER = np.array([180, 40, 255])
 
 # HSV range for yellow lane markings
-YELLOW_HSV_LOWER = np.array([18,  80,  100])
-YELLOW_HSV_UPPER = np.array([35,  255, 255])
+YELLOW_HSV_LOWER = np.array([18, 80, 100])
+YELLOW_HSV_UPPER = np.array([35, 255, 255])
 
 # Red wraps around the hue boundary in OpenCV (0–180 scale)
-RED_HSV_LOWER_1 = np.array([  0,  80, 100])
-RED_HSV_UPPER_1 = np.array([ 10, 255, 255])
-RED_HSV_LOWER_2 = np.array([160,  80, 100])
+RED_HSV_LOWER_1 = np.array([0, 80, 100])
+RED_HSV_UPPER_1 = np.array([10, 255, 255])
+RED_HSV_LOWER_2 = np.array([160, 80, 100])
 RED_HSV_UPPER_2 = np.array([180, 255, 255])
 
 
@@ -124,7 +129,7 @@ def filter_lane_colors(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
     white_mask = cv2.inRange(hsv, WHITE_HSV_LOWER, WHITE_HSV_UPPER)
     yellow_mask = cv2.inRange(hsv, YELLOW_HSV_LOWER, YELLOW_HSV_UPPER)
-    
+
     mask1 = cv2.inRange(hsv, RED_HSV_LOWER_1, RED_HSV_UPPER_1)
     mask2 = cv2.inRange(hsv, RED_HSV_LOWER_2, RED_HSV_UPPER_2)
     red_mask = cv2.bitwise_or(mask1, mask2)
@@ -136,12 +141,14 @@ def filter_lane_colors(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
 
     # Mask out left half for white to keep only right lane marking
-    white_mask[:, :width // 2] = 0
+    white_mask[:, : width // 2] = 0
 
     return white_mask, yellow_mask, red_mask
 
 
-def fit_spline(mask: np.ndarray, take_leftmost_pixels=True) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+def fit_spline(
+    mask: np.ndarray, take_leftmost_pixels=True
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """
     Fit a cubic spline to the non-zero pixels in a binary mask.
     Pixels are sorted top-to-bottom (by y coordinate) for a natural lane curve.
@@ -189,12 +196,13 @@ def fit_spline(mask: np.ndarray, take_leftmost_pixels=True) -> Optional[Tuple[np
 # WAYPOINT PREDICTION
 # ─────────────────────────────────────────────
 
+
 def compute_waypoints(
     white_spline: Optional[Tuple[np.ndarray, np.ndarray]],
     yellow_spline: Optional[Tuple[np.ndarray, np.ndarray]],
     red_mask,
     image_height: int,
-    image_width: int
+    image_width: int,
 ) -> Optional[np.ndarray]:
     """
     Compute center waypoints between the white right lane marking and
@@ -224,13 +232,19 @@ def compute_waypoints(
                 continue
 
             # Get all pixels belonging to this component
-            component_pixels = np.column_stack(np.where(labels == label))  # (row, col) = (y, x)
-            points = component_pixels[:, ::-1].astype(np.float32)          # flip to (x, y)
+            component_pixels = np.column_stack(
+                np.where(labels == label)
+            )  # (row, col) = (y, x)
+            points = component_pixels[:, ::-1].astype(np.float32)  # flip to (x, y)
             # Fit a rotated bounding box → gives angle
             _, _, angle = cv2.minAreaRect(points)
             # angle is in [-90, 0), if close to -90 or 0, it is horizontal
-            orientation = "vertical" if min(np.abs(angle), angle + 90) > ANGLE_THRESHOLD else "horizontal"
-            
+            orientation = (
+                "vertical"
+                if min(np.abs(angle), angle + 90) > ANGLE_THRESHOLD
+                else "horizontal"
+            )
+
             cx = int(centroids[label][0])
             cy = int(centroids[label][1])
             lines.append([cx, cy, orientation, angle, area])
@@ -250,7 +264,7 @@ def compute_waypoints(
                 point_to_stop_line = False
             else:
                 waypoints = compute_stop_line_waypoint(lines, image_height, image_width)
-    
+
     if not point_to_stop_line:
         if white_spline is not None and yellow_spline is not None:
             wx, wy = white_spline
@@ -286,6 +300,7 @@ def compute_waypoints(
 
     return waypoints
 
+
 def compute_crossing_waypoint(lines, image_height, image_width):
     """
     Detects all red stop lines at an intersection, excludes the one the car
@@ -305,9 +320,13 @@ def compute_crossing_waypoint(lines, image_height, image_width):
         return None
 
     # Use orientation and minimum/maximum info to get the right direction of the other lines
-    vertical_other_lines_left = [l for l in other_lines if l[2] == "vertical" and l[0] < LEFT_VS_RIGHT]
-    vertical_other_lines_right = [l for l in other_lines if l[2] == "vertical" and l[0] >= LEFT_VS_RIGHT]
-    horizontal_other_lines = [l for l in other_lines if l[2]  == "horizontal"]
+    vertical_other_lines_left = [
+        l for l in other_lines if l[2] == "vertical" and l[0] < LEFT_VS_RIGHT
+    ]
+    vertical_other_lines_right = [
+        l for l in other_lines if l[2] == "vertical" and l[0] >= LEFT_VS_RIGHT
+    ]
+    horizontal_other_lines = [l for l in other_lines if l[2] == "horizontal"]
 
     choices = {}
     if len(horizontal_other_lines) == 1:
@@ -325,7 +344,7 @@ def compute_crossing_waypoint(lines, image_height, image_width):
             choices["left"] = vertical_other_lines_left[0]
         if len(vertical_other_lines_right) > 1:
             choices["right"] = vertical_other_lines_right[0]
-    
+
     print("\n------Possible Destinations------")
     for key, value in choices.items():
         print(f"{key}: {value}")
@@ -339,7 +358,7 @@ def compute_crossing_waypoint(lines, image_height, image_width):
         target = np.array(chosen[:2]) + CROSSING_OFFSET_LEFT
     elif decision == "right":
         target = np.array(chosen[:2]) + CROSSING_OFFSET_RIGHT
-    
+
     print(f"Decision: {decision}\n")
 
     x = int(np.clip(target[0], 0, image_width))
@@ -349,24 +368,30 @@ def compute_crossing_waypoint(lines, image_height, image_width):
     decision_waypoint = np.array([[x, y]])
     return decision_waypoint
 
+
 def compute_stop_line_waypoint(lines, image_height, image_width):
     """
     Finds the horizontal red halting line closest to the car (highest y)
     and returns the center point of that line.
-    
+
     Args:
         lines
     Returns:
         (cx, cy) center of the halting line, or None if not found
     """
     # ── Step 2: Identify the closest stop line ──
-    current_line = max([l for l in lines if l[2] == "horizontal"], key=lambda l: l[1], default=[int(image_width/2), 0])  # max cy
+    current_line = max(
+        [l for l in lines if l[2] == "horizontal"],
+        key=lambda l: l[1],
+        default=[int(image_width / 2), 0],
+    )  # max cy
     return np.array([[current_line[0], current_line[1]]])
 
 
 # ─────────────────────────────────────────────
 # HEADING ESTIMATION
 # ─────────────────────────────────────────────
+
 
 def estimate_heading_error(waypoints: np.ndarray, image_width: int) -> float:
     """
@@ -396,6 +421,7 @@ def estimate_heading_error(waypoints: np.ndarray, image_width: int) -> float:
 # WHEEL COMMAND COMPUTATION
 # ─────────────────────────────────────────────
 
+
 def heading_to_wheel_commands(heading_error: float) -> Tuple[float, float]:
     """
     Convert a heading error to differential wheel speeds.
@@ -418,11 +444,11 @@ def heading_to_wheel_commands(heading_error: float) -> Tuple[float, float]:
         correction = STEERING_GAIN * heading_error
         correction = float(np.clip(correction, -MAX_SPEED_DIFF, MAX_SPEED_DIFF))
 
-        vel_left  = BASE_SPEED + correction
+        vel_left = BASE_SPEED + correction
         vel_right = BASE_SPEED - correction
 
     # Clamp to valid range
-    vel_left  = float(np.clip(vel_left,  -1.0, 1.0))
+    vel_left = float(np.clip(vel_left, -1.0, 1.0))
     vel_right = float(np.clip(vel_right, -1.0, 1.0))
 
     crossing_vel_left = vel_left
@@ -435,7 +461,10 @@ def heading_to_wheel_commands(heading_error: float) -> Tuple[float, float]:
 # MAIN PIPELINE ENTRY POINT
 # ─────────────────────────────────────────────
 
-def visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, waypoints):
+
+def visualize(
+    image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, waypoints
+):
 
     # Dim everything to 15%, then restore lane pixels to full brightness
     vis = (image * 0.15).astype(np.uint8)
@@ -446,28 +475,41 @@ def visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spl
     if white_spline is not None:
         wx, wy = white_spline
         for i in range(len(wx) - 1):
-            cv2.line(vis, (int(wx[i]), int(wy[i])), (int(wx[i+1]), int(wy[i+1])), (255, 0, 0), 2)
+            cv2.line(
+                vis,
+                (int(wx[i]), int(wy[i])),
+                (int(wx[i + 1]), int(wy[i + 1])),
+                (255, 0, 0),
+                2,
+            )
 
     if yellow_spline is not None:
         yx, yy = yellow_spline
         for i in range(len(yx) - 1):
-            cv2.line(vis, (int(yx[i]), int(yy[i])), (int(yx[i+1]), int(yy[i+1])), (0, 255, 0), 2)
+            cv2.line(
+                vis,
+                (int(yx[i]), int(yy[i])),
+                (int(yx[i + 1]), int(yy[i + 1])),
+                (0, 255, 0),
+                2,
+            )
 
     if waypoints is not None:
-        for (x, y) in waypoints:
+        for x, y in waypoints:
             cv2.circle(vis, (int(x), int(y)), 4, (255, 191, 0), -1)
 
     return vis
 
+
 def state_transition(red_mask):
-    
+
     def change_state(s: State):
         global state, state_entered_at, crossing_decision
         state = s
         state_entered_at = time.time()
         crossing_decision = False
         print_state()
-    
+
     def time_passed(t):
         return time.time() - state_entered_at >= t
 
@@ -490,6 +532,7 @@ def state_transition(red_mask):
     if state == State.CROSS:
         if time_passed(CROSS_TIME):
             change_state(State.DRIVE)
+
 
 def process_all(data) -> Tuple[float, float]:
     """
@@ -520,16 +563,26 @@ def process_all(data) -> Tuple[float, float]:
 
     state_transition(red_mask)
 
-    white_spline  = fit_spline(white_mask, take_leftmost_pixels=True)
+    white_spline = fit_spline(white_mask, take_leftmost_pixels=True)
     yellow_spline = fit_spline(yellow_mask, take_leftmost_pixels=False)
 
     if not crossing_decision:
-        waypoints = compute_waypoints(white_spline, yellow_spline, red_mask, image_height, image_width)
+        waypoints = compute_waypoints(
+            white_spline, yellow_spline, red_mask, image_height, image_width
+        )
 
         if waypoints is None:
             # No lane detected at all — stop safely
-            visualization = visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, None)
-            return 0.0, 0.0, visualization 
+            visualization = visualize(
+                image,
+                white_mask,
+                yellow_mask,
+                red_mask,
+                white_spline,
+                yellow_spline,
+                None,
+            )
+            return 0.0, 0.0, visualization
 
         # ── Step 4: Heading error ────────────────────
         heading_error = estimate_heading_error(waypoints, image_width)
@@ -542,11 +595,11 @@ def process_all(data) -> Tuple[float, float]:
         waypoints = decision_waypoint
 
     # ── Visualization ────────────────────────────
-    visualization = visualize(image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, waypoints)
+    visualization = visualize(
+        image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, waypoints
+    )
 
     return vel_left, vel_right, visualization
-
-
 
 
 # import cv2
