@@ -12,7 +12,7 @@ from typing import Tuple, Optional
 import random
 from enum import Enum
 import time
-#from object_detection import ODModel
+from object_detection import ODModel
 
 
 # Finite State Machine
@@ -128,7 +128,7 @@ BLUE_HSV_UPPER = np.array([  130,  255, 255])
 # ─────────────────────────────────────────────
 # OBJECT DETECTION
 # ─────────────────────────────────────────────
-#od_model = ODModel()
+od_model = ODModel()
 
 def filter_lane_colors(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -617,7 +617,7 @@ def process_all(data) -> Tuple[float, float]:
 
     tof = data._tof
 
-    #print(od_model.stop_for_object(image))
+    object_detection = od_model.stop_for_object(image)
 
     white_mask, yellow_mask, red_mask = filter_lane_colors(image)
 
@@ -669,7 +669,7 @@ def process_all(data) -> Tuple[float, float]:
     time_last_waypoint = time.time()
 
     if state != State.BLOCKED:
-        if tof < TOF_THRESHOLD:
+        if tof < TOF_THRESHOLD or object_detection:
             prev_state = state
             state = State.BLOCKED
             print_state()
@@ -678,7 +678,7 @@ def process_all(data) -> Tuple[float, float]:
         vel_right = 0
         if blocked_state_last_time != None:
             remained_in_blocked_state += time.time() - blocked_state_last_time
-        if tof > TOF_THRESHOLD:
+        if tof > TOF_THRESHOLD and not object_detection:
             state = prev_state
             print_state()
 

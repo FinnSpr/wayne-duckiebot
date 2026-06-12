@@ -6,17 +6,18 @@ import onnxruntime as ort
 import rospkg
 
 rospack = rospkg.RosPack()
-PROJECT_ROOT = Path(rospack.get_path("my_package"))
-MODEL_PATH = PROJECT_ROOT / "matrix_object_detection.onnx"
+PKG_ROOT = Path(rospack.get_path("my_package"))
+MODEL_PATH = PKG_ROOT / "matrix_object_detection.onnx"
 
-CONF_THRESHOLD = 0.5
-STOP_SIZE = 1
-FORWARD_PWM = 0.2
+CONF_THRESHOLD = 0.4
+STOP_SIZE = 2000
+# Coordinate interval for which object centroid is considered as obstacle
+CENTROID_INTERVAL = [160, 550, 100, 480] #x1, x2, y1, y2
 
 
 class ODModel:
     def __init__(self):
-        print("Initializing ODModel")
+        print("Initializing ODModel", flush=True)
 
         if not MODEL_PATH.exists():
             raise FileNotFoundError("ONNX model not found (did you download your trained model?):", MODEL_PATH)
@@ -48,7 +49,7 @@ class ODModel:
         
         stop = False
 
-        for x1, y1, x2, y2, score, _ in detections:
+        for x1, y1, x2, y2, score, id in detections:
 
             #print(f"Detection: {x1}-{x2}, {y1}-{y2}, {score}")
             # TODO we don't want to consider detections with confidence (score) below CONF_THRESHOLD (a value you should set in config.py)
@@ -66,17 +67,20 @@ class ODModel:
                 continue
 
             size = (x2-x1)*(y2-y1)
+            centroid = [(x1+x2) / 2, (y1+y2) / 2]
+
             #print(
                 #f"Detection score={score:.2f}, "
                 #f"size={size:.2f} m"
             #)
 
             if size >= STOP_SIZE:
-                print(
-                    f"STOP: object detected at "
-                    f"{size:.2f} m"
-                )
-                return True
+                if centroid[0] >= CENTROID_INTERVAL[0] and\
+                centroid[0] <= CENTROID_INTERVAL[1] and\
+                centroid[1] >= CENTROID_INTERVAL[2] and\
+                centroid[1] <= CENTROID_INTERVAL[3]:
+                    print(f"Blocking object detected: x={centroid[0]}, y={centroid[1]}, size={int(size)}, confidence={score:.2f}", flush=True)
+                    return True
 
         return stop
 
@@ -98,9 +102,6 @@ class ODModel:
         try:
             detections = self._run_detector(img)
         except Exception as e:
-            print(f"ONNX inference error {e}")
+            print(f"ONNX inference error {e}", flush=True)
             return True
-        if self._should_stop(detections):
-            return True
-        else:
-            return False
+        return self._should_stop(detections)
