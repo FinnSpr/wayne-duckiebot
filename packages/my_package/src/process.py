@@ -12,6 +12,7 @@ from typing import Tuple, Optional
 import random
 from enum import Enum
 import time
+from pid_controller import PIDController
 
 
 # Finite State Machine
@@ -46,12 +47,14 @@ decision = None
 # HYPERPARAMETERS
 # ─────────────────────────────────────────────
 
+VIRTUAL = True
+
 # Base speed for both wheels (0.0 – 1.0)
 BASE_SPEED = 0.25
 
 # Steering gain: how strongly heading error affects wheel differential
 # Higher = more aggressive turning
-STEERING_GAIN = 0.1
+STEERING_GAIN = 0.15
 
 # Maximum allowed wheel speed difference (clamps hard turns)
 MAX_SPEED_DIFF = 0.2
@@ -64,6 +67,12 @@ HIDE_TOP_OF_IMAGE = 250
 
 # Number of waypoints to sample along each fitted spline
 N_WAYPOINTS = 6
+
+# Scale factor for single-lane fallback: when only one lane marking is visible,
+# project waypoints toward the opposite bottom corner with a perspective-like
+# scaling.  0.0 = no shift, 1.0 = opposite image edge at the bottom row.
+SINGLE_LANE_SCALE_FACTOR_WHITE = 0.65  # white-only → shift left
+SINGLE_LANE_SCALE_FACTOR_YELLOW = 0.6  # yellow-only → shift right
 
 # Minimum y value for red intersection marker to stop the vehicle
 STOP_MARKER_Y = 350
@@ -98,9 +107,15 @@ CROSS_TIME = 1.5
 # COLOR FILTERING
 # ─────────────────────────────────────────────
 
+# Gaussian blur standard deviation for pre-processing
+SIGMA = 2.0
+
+# Sobel edge magnitude threshold
+SOBEL_THRESHOLD = 50
+
 # HSV range for white lane markings
-WHITE_HSV_LOWER = np.array([0, 0, 180])
-WHITE_HSV_UPPER = np.array([180, 40, 255])
+WHITE_HSV_LOWER = np.array([0, 0, 200])
+WHITE_HSV_UPPER = np.array([180, 30, 255])
 
 # HSV range for yellow lane markings
 YELLOW_HSV_LOWER = np.array([18, 80, 100])
@@ -112,38 +127,76 @@ RED_HSV_UPPER_1 = np.array([10, 255, 255])
 RED_HSV_LOWER_2 = np.array([160, 80, 100])
 RED_HSV_UPPER_2 = np.array([180, 255, 255])
 
+# HSV range for green
+GREEN_HSV_LOWER = np.array([35, 50, 50])
+GREEN_HSV_UPPER = np.array([85, 255, 255])
 
-def filter_lane_colors(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+
+def filter_lane_colors(
+    image: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Filter the image for white and yellow lane markings using HSV thresholding.
-    Only the right half of the image is considered for white markings,
-    to avoid picking up the left white lane marking.
+    Filter the image for white and yellow lane markings.
+    Steps:
+        1. Gaussian blur to suppress noise
+        2. Sobel edge detection with directional masks
+        3. HSV color thresholding on the blurred image
+        4. White lane mask: find rightmost right-edge pixel per row, then
+           its corresponding left-edge pixel to the left
+        5. Yellow/red: intersect color with edge mask
     Args:
         image: BGR image from the camera (480x640x3)
     Returns:
-        white_mask: binary mask of right white lane pixels only
-        yellow_mask: binary mask of yellow lane pixels
+        white_lane_mask: binary mask of right white lane edges
+        yellow_mask:     binary mask of yellow lane pixels
+        red_mask:        binary mask of red stop-line pixels
+        edge_mask:       binary mask of Sobel edges (before color filtering)
+        white_color:     raw white color mask (before edge intersection)
     """
-    _, width = image.shape[:2]
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    # ── Step 1: Gaussian blur ──
+    blurred = cv2.GaussianBlur(image, (0, 0), sigmaX=SIGMA)
 
-    white_mask = cv2.inRange(hsv, WHITE_HSV_LOWER, WHITE_HSV_UPPER)
-    yellow_mask = cv2.inRange(hsv, YELLOW_HSV_LOWER, YELLOW_HSV_UPPER)
+    # ── Step 2: Sobel edge detection ──
+    gray = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
+    sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+    magnitude = np.sqrt(sobel_x**2 + sobel_y**2)
+    edge_mask = (magnitude > SOBEL_THRESHOLD).astype(np.uint8) * 255
+
+    mask_sobelx_pos = ((sobel_x > 0).astype(np.uint8)) * 255
+    mask_sobelx_neg = ((sobel_x < 0).astype(np.uint8)) * 255
+    mask_sobely_pos = ((sobel_y > 0).astype(np.uint8)) * 255
+
+    # ── Step 3: HSV color thresholding on the blurred image ──
+    hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+
+    white_color = cv2.inRange(hsv, WHITE_HSV_LOWER, WHITE_HSV_UPPER)
+    yellow_color = cv2.inRange(hsv, YELLOW_HSV_LOWER, YELLOW_HSV_UPPER)
+
+    if VIRTUAL:
+        green_mask = cv2.inRange(hsv, GREEN_HSV_LOWER, GREEN_HSV_UPPER)
+        white_color = cv2.bitwise_or(white_color, green_mask)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    white_color = cv2.morphologyEx(white_color, cv2.MORPH_OPEN, kernel)
 
     mask1 = cv2.inRange(hsv, RED_HSV_LOWER_1, RED_HSV_UPPER_1)
     mask2 = cv2.inRange(hsv, RED_HSV_LOWER_2, RED_HSV_UPPER_2)
-    red_mask = cv2.bitwise_or(mask1, mask2)
+    red_color = cv2.bitwise_or(mask1, mask2)
 
-    # Morphological cleanup to remove noise
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
-    yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_OPEN, kernel)
-    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
+    white_edges = cv2.bitwise_and(white_color, edge_mask)
+    right_edge_white_lane = cv2.bitwise_and(
+        white_edges, cv2.bitwise_and(mask_sobelx_neg, mask_sobely_pos)
+    )
 
-    # Mask out left half for white to keep only right lane marking
-    white_mask[:, : width // 2] = 0
+    yellow_mask = cv2.bitwise_and(yellow_color, edge_mask)
+    yellow_mask = cv2.bitwise_and(
+        yellow_mask, cv2.bitwise_and(mask_sobelx_pos, mask_sobely_pos)
+    )
 
-    return white_mask, yellow_mask, red_mask
+    red_mask = cv2.bitwise_and(red_color, edge_mask)
+
+    return right_edge_white_lane, yellow_mask, red_mask, edge_mask, white_color
 
 
 def fit_spline(
@@ -165,10 +218,6 @@ def fit_spline(
     # Sort by y (top to bottom in image)
     sort_idx = np.argsort(ys)
     xs, ys = xs[sort_idx], ys[sort_idx]
-
-    # Downsample to speed up fitting and reduce noise influence
-    step = max(1, len(xs) // 100)
-    xs, ys = xs[::step], ys[::step]
 
     if take_leftmost_pixels:
         take_fn = np.min
@@ -274,26 +323,26 @@ def compute_waypoints(
             center_x = (wx + yx) / 2.0
             center_y = (wy + yy) / 2.0
 
-            # Fit a new spline through the center points
-            try:
-                tck, _ = splprep([center_x, center_y], s=999999, k=3)
-                u_fine = np.linspace(0, 1, N_WAYPOINTS)
-                cx_spline, cy_spline = splev(u_fine, tck)
-                waypoints = np.column_stack([cx_spline, cy_spline])
-            except Exception as e:
-                waypoints = np.column_stack([center_x, center_y])
+            waypoints = np.column_stack([center_x, center_y])
 
         elif white_spline is not None:
-            # Only white lane visible: offset left by 25% of image width
+            # Only white (right) lane visible — project toward bottom-left corner
+            # t_x based on x (progress toward left edge), t_y based on y (progress toward bottom)
             wx, wy = white_spline
-            offset = image_width * 0.25
-            waypoints = np.column_stack([wx - offset, wy])
+            t_x = wx / image_width  # 0 at left edge, 1 at right edge
+            t_y = 1 - wy / image_height  # 0 at top, 1 at bottom
+            center_x = wx - wx * t_x * SINGLE_LANE_SCALE_FACTOR_WHITE
+            center_y = wy + (image_height - wy) * t_y * SINGLE_LANE_SCALE_FACTOR_WHITE
+            waypoints = np.column_stack([center_x, center_y])
 
         elif yellow_spline is not None:
-            # Only yellow lane visible: offset right by 25% of image width
+            # Only yellow (left) lane visible — project toward bottom-right corner
             yx, yy = yellow_spline
-            offset = image_width * 0.25
-            waypoints = np.column_stack([yx + offset, yy])
+            t_x = 1 - yx / image_width
+            t_y = 1 - yy / image_height
+            center_x = yx + (image_width - yx) * t_x * SINGLE_LANE_SCALE_FACTOR_YELLOW
+            center_y = yy + (image_height - yy) * t_y * SINGLE_LANE_SCALE_FACTOR_YELLOW
+            waypoints = np.column_stack([center_x, center_y])
 
         else:
             waypoints = None
@@ -393,7 +442,9 @@ def compute_stop_line_waypoint(lines, image_height, image_width):
 # ─────────────────────────────────────────────
 
 
-def estimate_heading_error(waypoints: np.ndarray, image_width: int) -> float:
+def estimate_heading_error(
+    waypoints: np.ndarray, image_width: int, image_height: int
+) -> float:
     """
     Estimate the lateral heading error from the center waypoints.
     Uses a lookahead point and compares its x position to the image center.
@@ -404,17 +455,20 @@ def estimate_heading_error(waypoints: np.ndarray, image_width: int) -> float:
     Args:
         waypoints:   array of shape (N, 2) with (x, y) waypoints
         image_width: width of the camera image in pixels
-
+        image_height: height of the camera image in pixels
     Returns:
         heading_error: normalized lateral error in [-1, 1]
     """
     # Take farthest waypoint
     farthest = waypoints[0]
-
-    # Normalize to [-1, 1] by half the image width
     image_center_x = image_width / 2.0
-    error_farthest = (farthest[0] - image_center_x) / image_center_x
-    return float(np.clip(error_farthest, -1.0, 1.0))
+
+    dx = farthest[0] - image_center_x
+    dy = image_height - farthest[1]
+    path_angle = np.arctan2(dx, dy)
+
+    angle_error = path_angle / (np.pi / 2)
+    return float(np.clip(angle_error, -1.0, 1.0))
 
 
 # ─────────────────────────────────────────────
@@ -463,12 +517,18 @@ def heading_to_wheel_commands(heading_error: float) -> Tuple[float, float]:
 
 
 def visualize(
-    image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, waypoints
+    image,
+    white_lane_mask,
+    yellow_mask,
+    red_mask,
+    white_spline,
+    yellow_spline,
+    waypoints,
 ):
 
     # Dim everything to 15%, then restore lane pixels to full brightness
     vis = (image * 0.15).astype(np.uint8)
-    vis[white_mask > 0] = image[white_mask > 0]
+    vis[white_lane_mask > 0] = image[white_lane_mask > 0]
     vis[yellow_mask > 0] = image[yellow_mask > 0]
     vis[red_mask > 0] = image[red_mask > 0]
 
@@ -551,19 +611,25 @@ def process_all(data) -> Tuple[float, float]:
     Returns:
         (vel_left, vel_right): wheel velocities in [0, 1]
     """
-    image = data._image
+    # Use unwarped (bird's-eye) image if available, otherwise fall back to raw image
+    if hasattr(data, "_unwarped_image") and data._unwarped_image is not None:
+        image = data._unwarped_image
+    else:
+        image = data._image
     image_height, image_width = image.shape[:2]
 
-    white_mask, yellow_mask, red_mask = filter_lane_colors(image)
+    white_lane_mask, yellow_mask, red_mask, edge_mask, white_color = filter_lane_colors(
+        image
+    )
 
     if state == State.DRIVE:
-        white_mask[:HIDE_TOP_OF_IMAGE, :] = 0
+        white_lane_mask[:HIDE_TOP_OF_IMAGE, :] = 0
         yellow_mask[:HIDE_TOP_OF_IMAGE, :] = 0
         red_mask[:HIDE_TOP_OF_IMAGE, :] = 0
 
     state_transition(red_mask)
 
-    white_spline = fit_spline(white_mask, take_leftmost_pixels=True)
+    white_spline = fit_spline(white_lane_mask, take_leftmost_pixels=False)
     yellow_spline = fit_spline(yellow_mask, take_leftmost_pixels=False)
 
     if not crossing_decision:
@@ -575,17 +641,25 @@ def process_all(data) -> Tuple[float, float]:
             # No lane detected at all — stop safely
             visualization = visualize(
                 image,
-                white_mask,
+                white_lane_mask,
                 yellow_mask,
                 red_mask,
                 white_spline,
                 yellow_spline,
                 None,
             )
-            return 0.0, 0.0, visualization
+            return (
+                0.0,
+                0.0,
+                visualization,
+                edge_mask,
+                white_lane_mask,
+                yellow_mask,
+                white_color,
+            )
 
         # ── Step 4: Heading error ────────────────────
-        heading_error = estimate_heading_error(waypoints, image_width)
+        heading_error = estimate_heading_error(waypoints, image_width, image_height)
 
         # ── Step 5: Wheel commands ───────────────────
         vel_left, vel_right = heading_to_wheel_commands(heading_error)
@@ -596,31 +670,21 @@ def process_all(data) -> Tuple[float, float]:
 
     # ── Visualization ────────────────────────────
     visualization = visualize(
-        image, white_mask, yellow_mask, red_mask, white_spline, yellow_spline, waypoints
+        image,
+        white_lane_mask,
+        yellow_mask,
+        red_mask,
+        white_spline,
+        yellow_spline,
+        waypoints,
     )
 
-    return vel_left, vel_right, visualization
-
-
-# import cv2
-
-
-# def process_all(data):
-#     return image_green_check(data._image)
-
-# def image_green_check(image):
-#     # Convert to HSV for reliable color detection
-#     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-#     # Green color range in HSV
-#     lower_green = (35, 50, 50)
-#     upper_green = (85, 255, 255)
-
-#     # Create mask and calculate percentage of green pixels
-#     mask = cv2.inRange(hsv, lower_green, upper_green)
-#     green_ratio = cv2.countNonZero(mask) / mask.size
-
-#     if green_ratio > 0.5:  # more than 50% of image is green → stop
-#         return 0.0, 0.0
-#     else:                  # not enough green → drive straight
-#         return 0.5, 0.5
+    return (
+        vel_left,
+        vel_right,
+        visualization,
+        edge_mask,
+        white_lane_mask,
+        yellow_mask,
+        white_color,
+    )
