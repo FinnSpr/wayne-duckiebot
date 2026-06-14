@@ -50,11 +50,11 @@ decision = None
 VIRTUAL = True
 
 # Base speed for both wheels (0.0 – 1.0)
-BASE_SPEED = 0.25
+BASE_SPEED = 0.15
 
 # Steering gain: how strongly heading error affects wheel differential
 # Higher = more aggressive turning
-STEERING_GAIN = 0.15
+STEERING_GAIN = 0.1
 
 # Maximum allowed wheel speed difference (clamps hard turns)
 MAX_SPEED_DIFF = 0.2
