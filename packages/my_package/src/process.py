@@ -5,15 +5,14 @@ Modular lane-following pipeline for Duckiebot.
 Entry point: process_all(image) -> (vel_left, vel_right)
 """
 
+import random
+import time
+from enum import Enum
+from typing import Optional, Tuple
+
 import cv2
 import numpy as np
-from scipy.interpolate import splprep, splev
-from typing import Tuple, Optional
-import random
-from enum import Enum
-import time
-from pid_controller import PIDController
-
+from scipy.interpolate import splev, splprep
 
 # Finite State Machine
 
@@ -47,23 +46,26 @@ decision = None
 # HYPERPARAMETERS
 # ─────────────────────────────────────────────
 
-VIRTUAL = True
+VIRTUAL = False
 
 # Base speed for both wheels (0.0 – 1.0)
-BASE_SPEED = 0.15
+BASE_SPEED = 0.15 if VIRTUAL else 0.1
 
 # Steering gain: how strongly heading error affects wheel differential
 # Higher = more aggressive turning
-STEERING_GAIN = 0.1
+STEERING_GAIN = 0.1 if VIRTUAL else 0.2
 
 # Maximum allowed wheel speed difference (clamps hard turns)
 MAX_SPEED_DIFF = 0.2
 
+# Keep only the largest connected component in the white lane mask
+WHITE_LANE_ONLY_BIGGEST_COMPONENT = True
+
 # Minimum number of lane marking pixels required to attempt spline fitting
-MIN_LANE_PIXELS = 30
+MIN_LANE_PIXELS = 30 if VIRTUAL else 100
 
 # How much of the top of the image is hidden for the spline fitting
-HIDE_TOP_OF_IMAGE = 250
+HIDE_TOP_OF_IMAGE = 250 if VIRTUAL else 200
 
 # Number of waypoints to sample along each fitted spline
 N_WAYPOINTS = 6
@@ -95,13 +97,13 @@ LEFT_VS_RIGHT = 320
 
 # Offset between stop marking and target point (lane) when crossing an intersection
 CROSSING_OFFSET_TOP = np.array([110, 0])
-CROSSING_OFFSET_LEFT = np.array([160, -350])
-CROSSING_OFFSET_RIGHT = np.array([200, -140])
+CROSSING_OFFSET_LEFT = np.array([160, -350]) if VIRTUAL else np.array([160, -300])
+CROSSING_OFFSET_RIGHT = np.array([200, -140]) if VIRTUAL else np.array([150, -140])
 
 # Times for the state transition (in s)
 STOP_TIME = 1
 FOLLOW_TIME = [4, 3, 2]  # left, top, right
-CROSS_TIME = 1.5
+CROSS_TIME = 3
 
 # ─────────────────────────────────────────────
 # COLOR FILTERING
@@ -114,12 +116,12 @@ SIGMA = 2.0
 SOBEL_THRESHOLD = 50
 
 # HSV range for white lane markings
-WHITE_HSV_LOWER = np.array([0, 0, 200])
-WHITE_HSV_UPPER = np.array([180, 30, 255])
+WHITE_HSV_LOWER = np.array([0, 0, 200]) if VIRTUAL else np.array([0, 0, 140])
+WHITE_HSV_UPPER = np.array([180, 30, 255]) if VIRTUAL else np.array([180, 90, 255])
 
 # HSV range for yellow lane markings
-YELLOW_HSV_LOWER = np.array([18, 80, 100])
-YELLOW_HSV_UPPER = np.array([35, 255, 255])
+YELLOW_HSV_LOWER = np.array([18, 80, 100]) if VIRTUAL else np.array([15, 55, 60])
+YELLOW_HSV_UPPER = np.array([35, 255, 255]) if VIRTUAL else np.array([40, 255, 255])
 
 # Red wraps around the hue boundary in OpenCV (0–180 scale)
 RED_HSV_LOWER_1 = np.array([0, 80, 100])
@@ -130,6 +132,15 @@ RED_HSV_UPPER_2 = np.array([180, 255, 255])
 # HSV range for green
 GREEN_HSV_LOWER = np.array([35, 50, 50])
 GREEN_HSV_UPPER = np.array([85, 255, 255])
+
+
+def filter_red(hsv: np.ndarray) -> np.ndarray:
+    """
+    Extract red color mask from an HSV image (handles hue wrap-around).
+    """
+    mask1 = cv2.inRange(hsv, RED_HSV_LOWER_1, RED_HSV_UPPER_1)
+    mask2 = cv2.inRange(hsv, RED_HSV_LOWER_2, RED_HSV_UPPER_2)
+    return cv2.bitwise_or(mask1, mask2)
 
 
 def filter_lane_colors(
@@ -172,6 +183,7 @@ def filter_lane_colors(
 
     white_color = cv2.inRange(hsv, WHITE_HSV_LOWER, WHITE_HSV_UPPER)
     yellow_color = cv2.inRange(hsv, YELLOW_HSV_LOWER, YELLOW_HSV_UPPER)
+    white_color = cv2.bitwise_and(white_color, cv2.bitwise_not(yellow_color))
 
     if VIRTUAL:
         green_mask = cv2.inRange(hsv, GREEN_HSV_LOWER, GREEN_HSV_UPPER)
@@ -180,23 +192,27 @@ def filter_lane_colors(
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     white_color = cv2.morphologyEx(white_color, cv2.MORPH_OPEN, kernel)
 
-    mask1 = cv2.inRange(hsv, RED_HSV_LOWER_1, RED_HSV_UPPER_1)
-    mask2 = cv2.inRange(hsv, RED_HSV_LOWER_2, RED_HSV_UPPER_2)
-    red_color = cv2.bitwise_or(mask1, mask2)
+    red_color = filter_red(hsv)
 
     white_edges = cv2.bitwise_and(white_color, edge_mask)
     right_edge_white_lane = cv2.bitwise_and(
         white_edges, cv2.bitwise_and(mask_sobelx_neg, mask_sobely_pos)
     )
 
+    if WHITE_LANE_ONLY_BIGGEST_COMPONENT:
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+            right_edge_white_lane
+        )
+        if num_labels > 1:  # label 0 is background
+            largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+            right_edge_white_lane = (labels == largest_label).astype(np.uint8) * 255
+
     yellow_mask = cv2.bitwise_and(yellow_color, edge_mask)
     yellow_mask = cv2.bitwise_and(
         yellow_mask, cv2.bitwise_and(mask_sobelx_pos, mask_sobely_pos)
     )
 
-    red_mask = cv2.bitwise_and(red_color, edge_mask)
-
-    return right_edge_white_lane, yellow_mask, red_mask, edge_mask, white_color
+    return right_edge_white_lane, yellow_mask, red_color, edge_mask, white_color
 
 
 def fit_spline(
@@ -400,6 +416,7 @@ def compute_crossing_waypoint(lines, image_height, image_width):
     print("")
 
     decision, chosen = random.choice(list(choices.items()))
+    decision, chosen = "straight", choices["straight"]
 
     if decision == "straight":
         target = np.array(chosen[:2]) + CROSSING_OFFSET_TOP
@@ -508,6 +525,8 @@ def heading_to_wheel_commands(heading_error: float) -> Tuple[float, float]:
     crossing_vel_left = vel_left
     crossing_vel_right = vel_right
 
+    print(f"Wheel velocities: left={vel_left}, right={vel_right}")
+
     return vel_left, vel_right
 
 
@@ -564,6 +583,7 @@ def visualize(
 def state_transition(red_mask):
 
     def change_state(s: State):
+        s = State.DRIVE
         global state, state_entered_at, crossing_decision
         state = s
         state_entered_at = time.time()
@@ -629,8 +649,12 @@ def process_all(data) -> Tuple[float, float]:
 
     state_transition(red_mask)
 
+    if state == State.STOP:
+        raw_hsv = cv2.cvtColor(data._image, cv2.COLOR_BGR2HSV)
+        red_mask = filter_red(raw_hsv)
+
     white_spline = fit_spline(white_lane_mask, take_leftmost_pixels=False)
-    yellow_spline = fit_spline(yellow_mask, take_leftmost_pixels=False)
+    yellow_spline = fit_spline(yellow_mask, take_leftmost_pixels=True)
 
     if not crossing_decision:
         waypoints = compute_waypoints(
@@ -655,6 +679,7 @@ def process_all(data) -> Tuple[float, float]:
                 edge_mask,
                 white_lane_mask,
                 yellow_mask,
+                red_mask,
                 white_color,
             )
 
@@ -686,5 +711,6 @@ def process_all(data) -> Tuple[float, float]:
         edge_mask,
         white_lane_mask,
         yellow_mask,
+        red_mask,
         white_color,
     )

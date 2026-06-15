@@ -10,7 +10,8 @@ from process import process_all
 from image_utils import load_calibrations, unwarp_image
 
 PUBLISH_TO_WHEELS = True
-PUBLISH_VISUALIZATIONS = False
+PUBLISH_MAIN_VISUALIZATION = True
+PUBLISH_ALL_VISUALIZATIONS = True
 
 
 class ROSCommunication(DTROS):
@@ -65,6 +66,10 @@ class ROSCommunication(DTROS):
 
         self._yellow_publisher = rospy.Publisher(
             f"/{self._vehicle_name}/lane_detection/image/yellow", Image, queue_size=1
+        )
+
+        self._red_publisher = rospy.Publisher(
+            f"/{self._vehicle_name}/lane_detection/image/red", Image, queue_size=1
         )
 
         # Subscribers
@@ -148,12 +153,14 @@ class ROSCommunication(DTROS):
             edge_mask,
             white_lane_mask,
             yellow_mask,
+            red_mask,
             white_color,
         ) = process_all(self)
-        if PUBLISH_VISUALIZATIONS:
+        if PUBLISH_MAIN_VISUALIZATION:
             self._vis_publisher.publish(
                 self._bridge.cv2_to_imgmsg(visualization, encoding="bgr8")
             )
+        if PUBLISH_ALL_VISUALIZATIONS:
             self._edge_publisher.publish(
                 self._bridge.cv2_to_imgmsg(edge_mask, encoding="mono8")
             )
@@ -165,6 +172,9 @@ class ROSCommunication(DTROS):
             )
             self._white_color_publisher.publish(
                 self._bridge.cv2_to_imgmsg(white_color, encoding="mono8")
+            )
+            self._red_publisher.publish(
+                self._bridge.cv2_to_imgmsg(red_mask, encoding="mono8")
             )
         if PUBLISH_TO_WHEELS:
             self._publisher.publish(
