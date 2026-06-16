@@ -12,7 +12,7 @@ MODEL_PATH = PKG_ROOT / "matrix_object_detection.onnx"
 CONF_THRESHOLD = 0.4
 STOP_SIZE = 2000
 # Coordinate interval for which object centroid is considered as obstacle
-CENTROID_INTERVAL = [160, 550, 100, 480] #x1, x2, y1, y2
+CENTROID_INTERVAL = [160, 550, 100, 480]  # x1, x2, y1, y2
 
 
 class ODModel:
@@ -20,7 +20,10 @@ class ODModel:
         print("Initializing ODModel", flush=True)
 
         if not MODEL_PATH.exists():
-            raise FileNotFoundError("ONNX model not found (did you download your trained model?):", MODEL_PATH)
+            raise FileNotFoundError(
+                "ONNX model not found (did you download your trained model?):",
+                MODEL_PATH,
+            )
 
         sess_opts = ort.SessionOptions()
         sess_opts.intra_op_num_threads = 1
@@ -28,7 +31,7 @@ class ODModel:
         self.session = ort.InferenceSession(
             str(MODEL_PATH),
             sess_options=sess_opts,
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"], 
+            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
         )
 
         inp = self.session.get_inputs()[0]
@@ -38,52 +41,53 @@ class ODModel:
         self.net_h = inp.shape[2]
         self.net_w = inp.shape[3]
 
-
     def _run_detector(self, img_bgr):
         x = self._preprocess(img_bgr)
         out = self.session.run(None, {self.input_name: x})[0]  # shape [1,N,6]
         return out[0]
 
+    def _should_stop(self, detections: np.ndarray):
 
-    def _should_stop(self, detections: np.ndarray): 
-        
         stop = False
 
         for x1, y1, x2, y2, score, id in detections:
 
-            #print(f"Detection: {x1}-{x2}, {y1}-{y2}, {score}")
+            # print(f"Detection: {x1}-{x2}, {y1}-{y2}, {score}")
             # TODO we don't want to consider detections with confidence (score) below CONF_THRESHOLD (a value you should set in config.py)
 
-
             # TODO we want to stop if there is a duckie closer than STOP_DISTANCE away
-            # To calculate if the duckie is too close we need to convert the pixel coordinates to 
+            # To calculate if the duckie is too close we need to convert the pixel coordinates to
             # world coordinates. To do so you can use the `self.ground_projector` object which has
             # loaded the camera extrinsic calibration
             # Specifically, if you want to project an object of type `pix = Pixel(x=u, y=v)` to a ground plane
             # point, you can first convert it to a vector (`vec = self.ground_projector.camera.pixel2vector(pix)`) and
-            # then you can intersect that vector with the ground plane (`self.ground_projector.vector2ground(vec)`). 
-            # That will be the point on the ground plane corresponding to the input pixel. 
+            # then you can intersect that vector with the ground plane (`self.ground_projector.vector2ground(vec)`).
+            # That will be the point on the ground plane corresponding to the input pixel.
             if score < CONF_THRESHOLD:
                 continue
 
-            size = (x2-x1)*(y2-y1)
-            centroid = [(x1+x2) / 2, (y1+y2) / 2]
+            size = (x2 - x1) * (y2 - y1)
+            centroid = [(x1 + x2) / 2, (y1 + y2) / 2]
 
-            #print(
-                #f"Detection score={score:.2f}, "
-                #f"size={size:.2f} m"
-            #)
+            # print(
+            # f"Detection score={score:.2f}, "
+            # f"size={size:.2f} m"
+            # )
 
             if size >= STOP_SIZE:
-                if centroid[0] >= CENTROID_INTERVAL[0] and\
-                centroid[0] <= CENTROID_INTERVAL[1] and\
-                centroid[1] >= CENTROID_INTERVAL[2] and\
-                centroid[1] <= CENTROID_INTERVAL[3]:
-                    print(f"Blocking object detected: x={centroid[0]}, y={centroid[1]}, size={int(size)}, confidence={score:.2f}", flush=True)
+                if (
+                    centroid[0] >= CENTROID_INTERVAL[0]
+                    and centroid[0] <= CENTROID_INTERVAL[1]
+                    and centroid[1] >= CENTROID_INTERVAL[2]
+                    and centroid[1] <= CENTROID_INTERVAL[3]
+                ):
+                    print(
+                        f"Blocking object detected: x={centroid[0]}, y={centroid[1]}, size={int(size)}, confidence={score:.2f}",
+                        flush=True,
+                    )
                     return True
 
         return stop
-
 
     def _preprocess(self, img_bgr):
         h, w = img_bgr.shape[:2]
@@ -96,7 +100,6 @@ class ODModel:
         img = img_bgr[:, :, ::-1].astype(self.in_dtype) / 255.0
         img = np.transpose(img, (2, 0, 1))[None, ...]
         return img
-        
 
     def stop_for_object(self, img: np.ndarray):
         try:
