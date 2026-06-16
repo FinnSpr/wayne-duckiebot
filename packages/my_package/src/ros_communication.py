@@ -15,7 +15,7 @@ class ROSCommunication(DTROS):
         )
 
         self._last_process_time = rospy.Time(0)
-        self._process_interval = rospy.Duration(1.0 / 5)  # 5 Hz
+        self._process_interval = rospy.Duration(1.0 / 15)  # 5 Hz
 
         self._vehicle_name = os.environ['VEHICLE_NAME']
         self._bridge = CvBridge()

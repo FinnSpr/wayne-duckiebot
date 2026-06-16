@@ -53,7 +53,7 @@ BASE_SPEED = 0.25
 
 # Steering gain: how strongly heading error affects wheel differential
 # Higher = more aggressive turning
-STEERING_GAIN = 0.1
+STEERING_GAIN = 0.2
 
 # Maximum allowed wheel speed difference (clamps hard turns)
 MAX_SPEED_DIFF = 0.2
@@ -63,6 +63,10 @@ MIN_LANE_PIXELS = 30
 
 # How much of the top of the image is hidden for the spline fitting
 HIDE_TOP_OF_IMAGE = 250
+
+# If only one of the two lines is detected, place the waypoints there
+IMAGE_WIDTH_OFFSET_FACTOR_YELLOW = 0.15
+IMAGE_WIDTH_OFFSET_FACTOR_WHITE = 0.25
 
 # Number of waypoints to sample along each fitted spline
 N_WAYPOINTS = 6
@@ -88,13 +92,13 @@ LEFT_VS_RIGHT = 320
 
 # Offset between stop marking and target point (lane) when crossing an intersection
 CROSSING_OFFSET_TOP = np.array([110, 0])
-CROSSING_OFFSET_LEFT = np.array([160, -350])
-CROSSING_OFFSET_RIGHT = np.array([200, -140])
+CROSSING_OFFSET_LEFT = np.array([160, -300])
+CROSSING_OFFSET_RIGHT = np.array([150, -140])
 
 # Times for the state transition (in s)
-STOP_TIME = 1
-FOLLOW_TIME = [4, 3, 2] # left, top, right
-CROSS_TIME = 1.5
+STOP_TIME = 1.5
+FOLLOW_TIME = [2.5, 2, 1] # left, top, right
+CROSS_TIME = 1
 
 WAIT_UNTIL_TURN_TIME = 3
 TURN_TIME = 1.8
@@ -109,9 +113,10 @@ TOF_THRESHOLD = 0.2
 # ─────────────────────────────────────────────
 
 # HSV range for white lane markings
-WHITE_HSV_LOWER = np.array([0,   0,   180])
-WHITE_HSV_UPPER = np.array([180, 40,  255])
-
+#WHITE_HSV_LOWER = np.array([220,   10,   60])
+#WHITE_HSV_UPPER = np.array([255, 40,  90])
+WHITE_HSV_LOWER = np.array([0,  0,   125])
+WHITE_HSV_UPPER = np.array([120, 100,  255])
 # HSV range for yellow lane markings
 YELLOW_HSV_LOWER = np.array([18,  80,  100])
 YELLOW_HSV_UPPER = np.array([35,  255, 255])
@@ -129,82 +134,160 @@ BLUE_HSV_UPPER = np.array([  130,  255, 255])
 # OBJECT DETECTION
 # ─────────────────────────────────────────────
 od_model = ODModel()
+# def filter_lane_colors(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+#     _, width = image.shape[:2]
+#     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-def filter_lane_colors(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Filter the image for white and yellow lane markings using HSV thresholding.
-    Only the right half of the image is considered for white markings,
-    to avoid picking up the left white lane marking.
-    Args:
-        image: BGR image from the camera (480x640x3)
-    Returns:
-        white_mask: binary mask of right white lane pixels only
-        yellow_mask: binary mask of yellow lane pixels
-    """
+#     # ── Yellow (unchanged) ───────────────────────────────────────────────────
+#     yellow_mask = cv2.inRange(hsv, YELLOW_HSV_LOWER, YELLOW_HSV_UPPER)
+#     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+#     yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_OPEN, kernel)
+
+#     # ── Red (unchanged) ──────────────────────────────────────────────────────
+#     mask1 = cv2.inRange(hsv, RED_HSV_LOWER_1, RED_HSV_UPPER_1)
+#     mask2 = cv2.inRange(hsv, RED_HSV_LOWER_2, RED_HSV_UPPER_2)
+#     red_mask = cv2.bitwise_or(mask1, mask2)
+#     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
+
+#     # ── White: edge-gated approach ───────────────────────────────────────────
+#     white_color = cv2.inRange(hsv, WHITE_HSV_LOWER, WHITE_HSV_UPPER)
+#     white_color = cv2.morphologyEx(white_color, cv2.MORPH_OPEN, kernel)
+
+#     v_channel = hsv[:, :, 2]
+#     edges = cv2.Canny(v_channel, 40, 120)
+
+#     edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+#     edges_dilated = cv2.dilate(edges, edge_kernel, iterations=2)
+#     white_mask = cv2.bitwise_and(white_color, edges_dilated)
+
+#     white_mask[:, :width // 2] = 0
+
+#     # ── Keep only the two leftmost edge contours ─────────────────────────────
+#     contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+#     if len(contours) > 2:
+#         # Sort contours by their leftmost x coordinate (bounding box left edge)
+#         contours_sorted = sorted(contours, key=lambda c: cv2.boundingRect(c)[0])
+
+#         # Reconstruct mask with only the two leftmost contours
+#         white_mask = np.zeros_like(white_mask)
+#         cv2.drawContours(white_mask, contours_sorted[:2], -1, 255, thickness=cv2.FILLED)
+
+#     return white_mask, yellow_mask, red_mask
+
+
+def filter_lane_colors(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     _, width = image.shape[:2]
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
-    white_mask = cv2.inRange(hsv, WHITE_HSV_LOWER, WHITE_HSV_UPPER)
+    # ── Yellow (unchanged) ───────────────────────────────────────────────────
     yellow_mask = cv2.inRange(hsv, YELLOW_HSV_LOWER, YELLOW_HSV_UPPER)
-    
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_OPEN, kernel)
+
+    # ── Red (unchanged) ──────────────────────────────────────────────────────
     mask1 = cv2.inRange(hsv, RED_HSV_LOWER_1, RED_HSV_UPPER_1)
     mask2 = cv2.inRange(hsv, RED_HSV_LOWER_2, RED_HSV_UPPER_2)
     red_mask = cv2.bitwise_or(mask1, mask2)
-
-    # Morphological cleanup to remove noise
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
-    yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_OPEN, kernel)
     red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel)
 
-    # Mask out left half for white to keep only right lane marking
+    # ── White: edge-gated approach ───────────────────────────────────────────
+    # 1. Broad color gate — keeps all white-ish pixels (floor included)
+    white_color = cv2.inRange(hsv, WHITE_HSV_LOWER, WHITE_HSV_UPPER)
+    white_color = cv2.morphologyEx(white_color, cv2.MORPH_OPEN, kernel)
+
+    # 2. Canny edges on the value (brightness) channel
+    #    Only the V channel is used so hue/saturation noise doesn't matter.
+    #    Tune thresholds if needed: lower→more edges, higher→fewer/cleaner.
+    v_channel = hsv[:, :, 2]
+    edges = cv2.Canny(v_channel, 40, 120)
+
+    # 3. Gate: only keep edges that fall inside a white-colored region.
+    #    Dilate the edge map a few pixels so we capture the marking body,
+    #    not just the 1-px boundary.
+    edge_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edges_dilated = cv2.dilate(edges, edge_kernel, iterations=2)
+    white_mask = cv2.bitwise_and(white_color, edges_dilated)
+
+    # 4. Restrict to right half (your original constraint)
     white_mask[:, :width // 2] = 0
 
     return white_mask, yellow_mask, red_mask
 
-
 def fit_spline(mask: np.ndarray, take_leftmost_pixels=True) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    """
-    Fit a cubic spline to the non-zero pixels in a binary mask.
-    Pixels are sorted top-to-bottom (by y coordinate) for a natural lane curve.
-    Args:
-        mask: binary mask of lane marking pixels
-    Returns:
-        (xs, ys): arrays of sampled spline points, or None if fitting failed
-    """
     ys, xs = np.where(mask > 0)
-
     if len(xs) < MIN_LANE_PIXELS:
         return None
 
-    # Sort by y (top to bottom in image)
-    sort_idx = np.argsort(ys)
-    xs, ys = xs[sort_idx], ys[sort_idx]
+    take_fn = np.min if take_leftmost_pixels else np.max
 
-    # Downsample to speed up fitting and reduce noise influence
-    step = max(1, len(xs) // 100)
-    xs, ys = xs[::step], ys[::step]
-
-    if take_leftmost_pixels:
-        take_fn = np.min
-    else:
-        take_fn = np.max
-
-    # Remove duplicate y values which cause splprep to fail based on take_leftmost_pixels
+    # ── Step 1: leftmost/rightmost pixel per row (on full data) ──────────────
+    # This must happen before any downsampling, otherwise most rows have only
+    # one surviving pixel and min/max just returns that arbitrary pixel.
     unique_ys = np.unique(ys)
     taken_xs = np.array([take_fn(xs[ys == y]) for y in unique_ys])
-    xs, ys = taken_xs, unique_ys
 
-    if len(xs) < 4:
+    # ── Step 2: sort top-to-bottom (unique_ys from np.unique is already sorted)
+    # unique_ys is already ascending, so no explicit sort needed here.
+
+    # ── Step 3: downsample the cleaned curve, not the raw pixel cloud ────────
+    step = max(1, len(unique_ys) // 100)
+    xs_ds = taken_xs[::step]
+    ys_ds = unique_ys[::step]
+
+    if len(xs_ds) < 4:
         return None
 
     try:
-        tck, _ = splprep([xs, ys], s=50000, k=3)
+        tck, _ = splprep([xs_ds, ys_ds], s=50000, k=3)
         u_fine = np.linspace(0, 1, N_WAYPOINTS)
         x_spline, y_spline = splev(u_fine, tck)
         return x_spline, y_spline
-    except Exception as e:
+    except Exception:
         return None
+
+# def fit_spline(mask: np.ndarray, take_leftmost_pixels=True) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+#     """
+#     Fit a cubic spline to the non-zero pixels in a binary mask.
+#     Pixels are sorted top-to-bottom (by y coordinate) for a natural lane curve.
+#     Args:
+#         mask: binary mask of lane marking pixels
+#     Returns:
+#         (xs, ys): arrays of sampled spline points, or None if fitting failed
+#     """
+#     ys, xs = np.where(mask > 0)
+
+#     if len(xs) < MIN_LANE_PIXELS:
+#         return None
+
+#     # Sort by y (top to bottom in image)
+#     sort_idx = np.argsort(ys)
+#     xs, ys = xs[sort_idx], ys[sort_idx]
+
+#     # Downsample to speed up fitting and reduce noise influence
+#     step = max(1, len(xs) // 100)
+#     xs, ys = xs[::step], ys[::step]
+
+#     if take_leftmost_pixels:
+#         take_fn = np.min
+#     else:
+#         take_fn = np.max
+
+#     # Remove duplicate y values which cause splprep to fail based on take_leftmost_pixels
+#     unique_ys = np.unique(ys)
+#     taken_xs = np.array([take_fn(xs[ys == y]) for y in unique_ys])
+#     xs, ys = taken_xs, unique_ys
+
+#     if len(xs) < 4:
+#         return None
+
+#     try:
+#         tck, _ = splprep([xs, ys], s=50000, k=3)
+#         u_fine = np.linspace(0, 1, N_WAYPOINTS)
+#         x_spline, y_spline = splev(u_fine, tck)
+#         return x_spline, y_spline
+#     except Exception as e:
+#         return None
 
 
 # ─────────────────────────────────────────────
@@ -294,13 +377,13 @@ def compute_waypoints(
         elif white_spline is not None:
             # Only white lane visible: offset left by 25% of image width
             wx, wy = white_spline
-            offset = image_width * 0.25
+            offset = image_width * IMAGE_WIDTH_OFFSET_FACTOR_WHITE
             waypoints = np.column_stack([wx - offset, wy])
 
         elif yellow_spline is not None:
             # Only yellow lane visible: offset right by 25% of image width
             yx, yy = yellow_spline
-            offset = image_width * 0.25
+            offset = image_width * IMAGE_WIDTH_OFFSET_FACTOR_YELLOW
             waypoints = np.column_stack([yx + offset, yy])
 
         else:
@@ -569,9 +652,7 @@ def state_transition(red_mask):
         return time.time() - time_last_waypoint >= t
 
     if state == State.DRIVE:
-        if no_waypoint_passed(WAIT_UNTIL_TURN_TIME):
-            change_state(State.TURN)
-        elif not np.all(red_mask[STOP_MARKER_Y:, :] == 0):
+        if np.sum(red_mask[STOP_MARKER_Y:, :] > 0) >= MIN_AREA:
             change_state(State.STOP)
     if state == State.STOP:
         if time_passed(STOP_TIME):
@@ -621,7 +702,7 @@ def process_all(data) -> Tuple[float, float]:
 
     white_mask, yellow_mask, red_mask = filter_lane_colors(image)
 
-    if state == State.DRIVE:
+    if state == State.DRIVE or state == State.CROSS:
         white_mask[:HIDE_TOP_OF_IMAGE, :] = 0
         yellow_mask[:HIDE_TOP_OF_IMAGE, :] = 0
         red_mask[:HIDE_TOP_OF_IMAGE, :] = 0
