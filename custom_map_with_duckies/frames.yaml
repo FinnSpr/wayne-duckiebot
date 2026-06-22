@@ -327,3 +327,43 @@ frames:
       roll: 0.0
       pitch: 0.0
       yaw: 0.0
+  map_0/duckie_0:
+    relative_to: ~
+    unit: tiles
+    pose:
+      x: 2.2
+      y: 1.0
+      z: 0.0
+      roll: 0.0
+      pitch: 0.0
+      yaw: 0.0
+  map_0/duckie_1:
+    relative_to: ~
+    unit: tiles
+    pose:
+      x: 1.0
+      y: 1.0
+      z: 0.0
+      roll: 0.0
+      pitch: 0.0
+      yaw: 1.5706806282723
+  map_0/duckie_2:
+    relative_to: ~
+    unit: tiles
+    pose:
+      x: 1.7
+      y: 2.5
+      z: 0.0
+      roll: 0.0
+      pitch: 0.0
+      yaw: 3.14159265359
+  map_0/duckie_3:
+    relative_to: ~
+    unit: tiles
+    pose:
+      x: 3.0
+      y: 1.0
+      z: 0.0
+      roll: 0.0
+      pitch: 0.0
+      yaw: 4.71238898038469

@@ -4,6 +4,9 @@ VIRTUAL = True
 ENHANCED_LANE_DETECTION = False
 OBJECT_DETECTION = False
 
+def get_modes():
+    return VIRTUAL, ENHANCED_LANE_DETECTION, OBJECT_DETECTION
+
 """
 Modular lane-following pipeline for Duckiebot.
 Entry point: process_all(image) -> (vel_left, vel_right)
@@ -61,7 +64,6 @@ intersection_admitted = False
 # ─────────────────────────────────────────────
 
 if VIRTUAL:
-    STEERING_GAIN = 0.1
     MIN_LANE_PIXELS = 30
     HIDE_TOP_OF_IMAGE = 250
     CROSSING_OFFSET_LEFT = np.array([160, -350])
@@ -77,8 +79,9 @@ if VIRTUAL:
     STOP_TIME = 1
     FOLLOW_TIME = [4, 3, 2]  # left, top, right
     CROSS_TIME = 1.5
+
+    TURN_TIME = 1.8
 else:
-    STEERING_GAIN = 0.2
     MIN_LANE_PIXELS = 100
     HIDE_TOP_OF_IMAGE = 200
     CROSSING_OFFSET_LEFT = np.array([160, -300])
@@ -92,21 +95,29 @@ else:
     YELLOW_HSV_UPPER = np.array([40, 255, 255])
 
     STOP_TIME = 2
-    FOLLOW_TIME = [6, 4, 3]  # left, top, right
+    FOLLOW_TIME = [4, 4, 3]  # left, top, right
     CROSS_TIME = 2
+
+    TURN_TIME = 3
 
 if VIRTUAL and not ENHANCED_LANE_DETECTION:
     BASE_SPEED = 0.25
+    STEERING_GAIN = 0.1
     IMAGE_WIDTH_OFFSET_FACTOR_YELLOW = 0.25
     IMAGE_WIDTH_OFFSET_FACTOR_WHITE = 0.25
 elif VIRTUAL and ENHANCED_LANE_DETECTION:
     BASE_SPEED = 0.25
+    STEERING_GAIN = 0.15
 elif not VIRTUAL and not ENHANCED_LANE_DETECTION:
     BASE_SPEED = 0.1
+    STEERING_GAIN = 0.25
     IMAGE_WIDTH_OFFSET_FACTOR_YELLOW = 0.15
     IMAGE_WIDTH_OFFSET_FACTOR_WHITE = 0.25
 else:
-    BASE_SPEED = 0.1
+    BASE_SPEED = 0.2
+    STEERING_GAIN = 0.25
+    CROSSING_OFFSET_LEFT = np.array([40, -100])
+    CROSSING_OFFSET_RIGHT = np.array([80, 100])
 
 CROSSING_OFFSET_TOP = np.array([110, 0])
 
@@ -122,7 +133,7 @@ CROSSING_OFFSET_TOP = np.array([110, 0])
 MAX_SPEED_DIFF = 0.2
 
 # Keep only the largest connected component in the white lane mask
-WHITE_LANE_ONLY_BIGGEST_COMPONENT = True
+WHITE_LANE_ONLY_BIGGEST_COMPONENT = False
 
 # Number of waypoints to sample along each fitted spline
 N_WAYPOINTS = 6
@@ -150,7 +161,6 @@ CUT_FRONT_STOP_LINE = 400
 LEFT_VS_RIGHT = 320
 
 WAIT_UNTIL_TURN_TIME = 3
-TURN_TIME = 1.8
 TURN_SPEED_RIGHT_WHEEL = 0.4
 
 PROXIMITY_OTHER_VEHICLES_TO_RED_LINE = 50
@@ -376,29 +386,6 @@ if ENHANCED_LANE_DETECTION:
                 cv2.circle(vis, (int(x), int(y)), 4, (255, 191, 0), -1)
 
         return vis
-    
-    def estimate_heading_error(waypoints: np.ndarray, image_width: int, image_height: int) -> float:
-        """
-        Estimate the lateral heading error from the center waypoints.
-        Uses a lookahead point and compares its x position to the image center.
-
-        A negative error means the path curves left  → steer left (slow left wheel).
-        A positive error means the path curves right → steer right (slow right wheel).
-
-        Args:
-            waypoints:   array of shape (N, 2) with (x, y) waypoints
-            image_width: width of the camera image in pixels
-
-        Returns:
-            heading_error: normalized lateral error in [-1, 1]
-        """
-        # Take farthest waypoint
-        farthest = waypoints[0]
-
-        # Normalize to [-1, 1] by half the image width
-        image_center_x = image_width / 2.0
-        error_farthest = (farthest[0] - image_center_x) / image_center_x
-        return float(np.clip(error_farthest, -1.0, 1.0))
 
 
 else:
@@ -723,16 +710,17 @@ def compute_crossing_waypoint(lines, image_height, image_width):
         print(f"{key}: {value}")
     print("")
 
-    decision, chosen = random.choice(list(choices.items()))
-    if not VIRTUAL:
-        decision, chosen = ("straight", horizontal_other_lines[0])
-
-    if decision == "straight":
-        target = np.array(chosen[:2]) + CROSSING_OFFSET_TOP
-    elif decision == "left":
-        target = np.array(chosen[:2]) + CROSSING_OFFSET_LEFT
-    elif decision == "right":
-        target = np.array(chosen[:2]) + CROSSING_OFFSET_RIGHT
+    if not choices:
+        decision = "straight"
+        target = np.array([image_width // 2, image_height // 2]) + CROSSING_OFFSET_TOP
+    else:
+        decision, chosen = random.choice(list(choices.items()))
+        if decision == "straight":
+            target = np.array(chosen[:2]) + CROSSING_OFFSET_TOP
+        elif decision == "left":
+            target = np.array(chosen[:2]) + CROSSING_OFFSET_LEFT
+        elif decision == "right":
+            target = np.array(chosen[:2]) + CROSSING_OFFSET_RIGHT
 
     print(f"Decision: {decision}\n")
 
@@ -974,7 +962,7 @@ def process_all(data) -> Tuple[float, float]:
 
     object_detected = od_model.stop_for_object(image) if OBJECT_DETECTION else False
 
-    if state == State.DRIVE:
+    if state == State.DRIVE or (state == State.CROSS and ENHANCED_LANE_DETECTION):
         white_lane_mask[:HIDE_TOP_OF_IMAGE, :] = 0
         yellow_mask[:HIDE_TOP_OF_IMAGE, :] = 0
         red_mask[:HIDE_TOP_OF_IMAGE, :] = 0
@@ -990,6 +978,28 @@ def process_all(data) -> Tuple[float, float]:
     yellow_spline = fit_spline(yellow_mask, take_leftmost_pixels=True)
 
     if not crossing_decision:
+        if state == State.TURN:
+            visualization = visualize(
+                image,
+                white_lane_mask,
+                yellow_mask,
+                red_mask,
+                white_spline,
+                yellow_spline,
+                None,
+            )
+            time_last_waypoint = time.time()
+            return (
+                0.0,
+                TURN_SPEED_RIGHT_WHEEL,
+                visualization,
+                edge_mask,
+                white_lane_mask,
+                yellow_mask,
+                red_mask,
+                white_color,
+            )
+        
         waypoints = compute_waypoints(
             white_spline, yellow_spline, red_mask, image_height, image_width
         )
@@ -1005,18 +1015,6 @@ def process_all(data) -> Tuple[float, float]:
                 None,
             )
             # No lane detected at all — stop safely
-            if state == State.TURN:
-                time_last_waypoint = time.time()
-                return (
-                    0.0,
-                    TURN_SPEED_RIGHT_WHEEL,
-                    visualization,
-                    edge_mask,
-                    white_lane_mask,
-                    yellow_mask,
-                    red_mask,
-                    white_color,
-                )
 
             return (
                 0.0,

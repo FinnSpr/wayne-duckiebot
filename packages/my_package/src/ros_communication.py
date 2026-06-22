@@ -6,13 +6,16 @@ from sensor_msgs.msg import CompressedImage, Image, Range, CameraInfo
 from duckietown_msgs.msg import WheelsCmdStamped, WheelEncoderStamped
 from cv_bridge import CvBridge
 
-from process import process_all
+from process import process_all, get_modes
 from image_utils import load_calibrations, unwarp_image
 
 PUBLISH_TO_WHEELS = True
-PUBLISH_MAIN_VISUALIZATION = True
-PUBLISH_ALL_VISUALIZATIONS = True
 
+# Turn this off, it needs lot of resources
+PUBLISH_MAIN_VISUALIZATION = False
+PUBLISH_ALL_VISUALIZATIONS = False
+
+VIRTUAL, ENHANCED_LANE_DETECTION, OBJECT_DETECTION = get_modes()
 
 class ROSCommunication(DTROS):
     def __init__(self, node_name):
@@ -21,7 +24,10 @@ class ROSCommunication(DTROS):
         )
 
         self._last_process_time = rospy.Time(0)
-        self._process_interval = rospy.Duration(1.0 / 5)  # 5 Hz
+
+        hz = 5 if VIRTUAL else 15
+
+        self._process_interval = rospy.Duration(1.0 / hz)
 
         self._vehicle_name = os.environ["VEHICLE_NAME"]
         self._bridge = CvBridge()
@@ -44,33 +50,35 @@ class ROSCommunication(DTROS):
             queue_size=1,
         )
 
-        self._vis_publisher = rospy.Publisher(
-            f"/{self._vehicle_name}/lane_detection/image/raw", Image, queue_size=1
-        )
+        if PUBLISH_MAIN_VISUALIZATION:
+            self._vis_publisher = rospy.Publisher(
+                f"/{self._vehicle_name}/lane_detection/image/raw", Image, queue_size=1
+            )
 
-        self._edge_publisher = rospy.Publisher(
-            f"/{self._vehicle_name}/lane_detection/image/edges", Image, queue_size=1
-        )
+        if PUBLISH_ALL_VISUALIZATIONS:
+            self._edge_publisher = rospy.Publisher(
+                f"/{self._vehicle_name}/lane_detection/image/edges", Image, queue_size=1
+            )
 
-        self._white_lane_publisher = rospy.Publisher(
-            f"/{self._vehicle_name}/lane_detection/image/white_edges",
-            Image,
-            queue_size=1,
-        )
+            self._white_lane_publisher = rospy.Publisher(
+                f"/{self._vehicle_name}/lane_detection/image/white_edges",
+                Image,
+                queue_size=1,
+            )
 
-        self._white_color_publisher = rospy.Publisher(
-            f"/{self._vehicle_name}/lane_detection/image/white_color",
-            Image,
-            queue_size=1,
-        )
+            self._white_color_publisher = rospy.Publisher(
+                f"/{self._vehicle_name}/lane_detection/image/white_color",
+                Image,
+                queue_size=1,
+            )
 
-        self._yellow_publisher = rospy.Publisher(
-            f"/{self._vehicle_name}/lane_detection/image/yellow", Image, queue_size=1
-        )
+            self._yellow_publisher = rospy.Publisher(
+                f"/{self._vehicle_name}/lane_detection/image/yellow", Image, queue_size=1
+            )
 
-        self._red_publisher = rospy.Publisher(
-            f"/{self._vehicle_name}/lane_detection/image/red", Image, queue_size=1
-        )
+            self._red_publisher = rospy.Publisher(
+                f"/{self._vehicle_name}/lane_detection/image/red", Image, queue_size=1
+            )
 
         # Subscribers
         self.sub_camera_info = rospy.Subscriber(
@@ -101,8 +109,9 @@ class ROSCommunication(DTROS):
         )
 
         # Publisher
-        wheels_topic = f"/{self._vehicle_name}/wheels_driver_node/wheels_cmd"
-        self._publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
+        if PUBLISH_TO_WHEELS:
+            wheels_topic = f"/{self._vehicle_name}/wheels_driver_node/wheels_cmd"
+            self._wheel_publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
 
     # --- Callbacks ---
     def cb_camera_info(self, msg):
@@ -178,14 +187,14 @@ class ROSCommunication(DTROS):
                 self._bridge.cv2_to_imgmsg(red_mask, encoding="mono8")
             )
         if PUBLISH_TO_WHEELS:
-            self._publisher.publish(
+            self._wheel_publisher.publish(
                 WheelsCmdStamped(vel_left=vel_left, vel_right=vel_right)
             )
 
     def on_shutdown(self):
         if PUBLISH_TO_WHEELS:
             stop = WheelsCmdStamped(vel_left=0, vel_right=0)
-            self._publisher.publish(stop)
+            self._wheel_publisher.publish(stop)
 
 
 if __name__ == "__main__":
