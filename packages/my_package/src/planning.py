@@ -1,6 +1,7 @@
 import time
 import random
 from enum import Enum
+from typing import Tuple, Optional
 import numpy as np
 import cv2
 from scipy.interpolate import splprep, splev
@@ -54,25 +55,20 @@ class BehaviorPlanner:
         if self.state == State.DRIVE:
             if self.no_waypoint_passed(config.WAIT_UNTIL_TURN_TIME):
                 self.change_state(State.TURN)
-            elif np.sum(red_mask[config.STOP_MARKER_Y:, :] > 0) >= config.MIN_AREA:
+            if np.sum(red_mask[config.STOP_MARKER_Y:, :] > 0) >= config.MIN_AREA:
                 self.change_state(State.STOP)
-        elif self.state == State.STOP:
+        if self.state == State.STOP:
             if self.time_passed(config.STOP_TIME):
                 self.change_state(State.FOLLOW)
-        elif self.state == State.FOLLOW:
-            t = 0
-            if self.decision == "left":
-                t = config.FOLLOW_TIME[0]
-            elif self.decision == "straight":
-                t = config.FOLLOW_TIME[1]
-            else:
-                t = config.FOLLOW_TIME[2]
+        if self.state == State.FOLLOW:
+            follow_map = {"left": config.FOLLOW_TIME[0], "straight": config.FOLLOW_TIME[1]}
+            t = follow_map.get(self.decision, config.FOLLOW_TIME[2])
             if self.time_passed(t):
                 self.change_state(State.CROSS)
-        elif self.state == State.CROSS:
+        if self.state == State.CROSS:
             if self.time_passed(config.CROSS_TIME):
                 self.change_state(State.DRIVE)
-        elif self.state == State.TURN:
+        if self.state == State.TURN:
             if self.time_passed(config.TURN_TIME):
                 self.change_state(State.DRIVE)
 
@@ -117,20 +113,40 @@ class BehaviorPlanner:
         right_occupied = bool(np.any(nearby_blue[:300, w // 2 :]))
 
         if self.decision == "left":
-            r = True
-            if right_occupied:
-                print("Waiting for right duckiebot...")
-                r = False
-            if top_occupied:
-                print("Waiting for top duckiebot...")
-                r = False
-            return r
-        elif self.decision == "straight":
-            if right_occupied:
-                print("Waiting for right duckiebot...")
+            if right_occupied: print("Waiting for right duckiebot...")
+            if top_occupied: print("Waiting for top duckiebot...")
+            return not (right_occupied or top_occupied)
+        if self.decision == "straight":
+            if right_occupied: print("Waiting for right duckiebot...")
             return not right_occupied
+        return True
+
+    def _project_single_spline(
+        self,
+        spline: Tuple[np.ndarray, np.ndarray],
+        image_width: int,
+        image_height: int,
+        is_white: bool
+    ) -> np.ndarray:
+        """Project waypoints using a single lane spline estimation."""
+        sx, sy = spline
+        if config.ENHANCED_LANE_DETECTION:
+            if is_white:
+                t_x = sx / image_width
+                scale = config.SINGLE_LANE_SCALE_FACTOR_WHITE
+                center_x = sx - sx * t_x * scale
+            else:
+                t_x = 1 - sx / image_width
+                scale = config.SINGLE_LANE_SCALE_FACTOR_YELLOW
+                center_x = sx + (image_width - sx) * t_x * scale
+
+            t_y = 1 - sy / image_height
+            center_y = sy + (image_height - sy) * t_y * scale
+            return np.column_stack([center_x, center_y])
         else:
-            return True
+            factor = config.IMAGE_WIDTH_OFFSET_FACTOR_WHITE if is_white else config.IMAGE_WIDTH_OFFSET_FACTOR_YELLOW
+            offset = image_width * factor
+            return np.column_stack([sx - offset if is_white else sx + offset, sy])
 
     def compute_waypoints(
         self,
@@ -150,29 +166,19 @@ class BehaviorPlanner:
                 if not other_lines:
                     waypoints = None
                 else:
-                    vertical_other_lines_left = [
-                        l for l in other_lines if l[2] == "vertical" and l[0] < config.LEFT_VS_RIGHT
-                    ]
-                    vertical_other_lines_right = [
-                        l for l in other_lines if l[2] == "vertical" and l[0] >= config.LEFT_VS_RIGHT
-                    ]
-                    horizontal_other_lines = [l for l in other_lines if l[2] == "horizontal"]
+                    v_left = [l for l in other_lines if l[2] == "vertical" and l[0] < config.LEFT_VS_RIGHT]
+                    v_right = [l for l in other_lines if l[2] == "vertical" and l[0] >= config.LEFT_VS_RIGHT]
+                    horiz = [l for l in other_lines if l[2] == "horizontal"]
 
+                    # Check for exactly 1 matching line first, then fall back to >1 matching lines
                     choices = {}
-                    if len(horizontal_other_lines) == 1:
-                        choices["straight"] = horizontal_other_lines[0]
-                    if len(vertical_other_lines_left) == 1:
-                        choices["left"] = vertical_other_lines_left[0]
-                    if len(vertical_other_lines_right) == 1:
-                        choices["right"] = vertical_other_lines_right[0]
-
+                    for key, lst in [("straight", horiz), ("left", v_left), ("right", v_right)]:
+                        if len(lst) == 1:
+                            choices[key] = lst[0]
                     if not choices:
-                        if len(horizontal_other_lines) > 1:
-                            choices["straight"] = horizontal_other_lines[0]
-                        if len(vertical_other_lines_left) > 1:
-                            choices["left"] = vertical_other_lines_left[0]
-                        if len(vertical_other_lines_right) > 1:
-                            choices["right"] = vertical_other_lines_right[0]
+                        for key, lst in [("straight", horiz), ("left", v_left), ("right", v_right)]:
+                            if len(lst) > 1:
+                                choices[key] = lst[0]
 
                     print("\n------Possible Destinations------")
                     for key, value in choices.items():
@@ -181,15 +187,16 @@ class BehaviorPlanner:
 
                     if not choices:
                         self.decision = "straight"
-                        target = np.array([image_width // 2, image_height // 2]) + config.CROSSING_OFFSET_TOP
+                        chosen = [image_width // 2, image_height // 2]
                     else:
                         self.decision, chosen = random.choice(list(choices.items()))
-                        if self.decision == "straight":
-                            target = np.array(chosen[:2]) + config.CROSSING_OFFSET_TOP
-                        elif self.decision == "left":
-                            target = np.array(chosen[:2]) + config.CROSSING_OFFSET_LEFT
-                        elif self.decision == "right":
-                            target = np.array(chosen[:2]) + config.CROSSING_OFFSET_RIGHT
+
+                    offsets = {
+                        "straight": config.CROSSING_OFFSET_TOP,
+                        "left": config.CROSSING_OFFSET_LEFT,
+                        "right": config.CROSSING_OFFSET_RIGHT
+                    }
+                    target = np.array(chosen[:2]) + offsets[self.decision]
 
                     print(f"Decision: {self.decision}\n")
                     x = int(np.clip(target[0], 0, image_width))
@@ -212,8 +219,6 @@ class BehaviorPlanner:
             if white_spline is not None and yellow_spline is not None:
                 wx, wy = white_spline
                 yx, yy = yellow_spline
-
-                # Average the two splines pointwise to get center points
                 center_x = (wx + yx) / 2.0
                 center_y = (wy + yy) / 2.0
 
@@ -227,30 +232,10 @@ class BehaviorPlanner:
                         waypoints = np.column_stack([cx_spline, cy_spline])
                     except Exception:
                         waypoints = np.column_stack([center_x, center_y])
-
             elif white_spline is not None:
-                wx, wy = white_spline
-                if config.ENHANCED_LANE_DETECTION:
-                    t_x = wx / image_width
-                    t_y = 1 - wy / image_height
-                    center_x = wx - wx * t_x * config.SINGLE_LANE_SCALE_FACTOR_WHITE
-                    center_y = wy + (image_height - wy) * t_y * config.SINGLE_LANE_SCALE_FACTOR_WHITE
-                    waypoints = np.column_stack([center_x, center_y])
-                else:
-                    offset = image_width * config.IMAGE_WIDTH_OFFSET_FACTOR_WHITE
-                    waypoints = np.column_stack([wx - offset, wy])
-
+                waypoints = self._project_single_spline(white_spline, image_width, image_height, is_white=True)
             elif yellow_spline is not None:
-                yx, yy = yellow_spline
-                if config.ENHANCED_LANE_DETECTION:
-                    t_x = 1 - yx / image_width
-                    t_y = 1 - yy / image_height
-                    center_x = yx + (image_width - yx) * t_x * config.SINGLE_LANE_SCALE_FACTOR_YELLOW
-                    center_y = yy + (image_height - yy) * t_y * config.SINGLE_LANE_SCALE_FACTOR_YELLOW
-                    waypoints = np.column_stack([center_x, center_y])
-                else:
-                    offset = image_width * config.IMAGE_WIDTH_OFFSET_FACTOR_YELLOW
-                    waypoints = np.column_stack([yx + offset, yy])
+                waypoints = self._project_single_spline(yellow_spline, image_width, image_height, is_white=False)
             else:
                 waypoints = None
 
