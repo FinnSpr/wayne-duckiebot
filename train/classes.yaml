@@ -1,0 +1,9 @@
+train:  train
+val:    val
+
+names:
+  0: 'yellow lane marking'
+  1: 'white lane marking'
+  2: 'red lane marking'
+  3: 'yellow rubber duck'
+  4: 'blue duckiebot'
