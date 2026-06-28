@@ -20,8 +20,7 @@ TEST_DATA_DIR = TEST_DATA_ROOT / "virtual" if VIRTUAL else TEST_DATA_ROOT / "phy
 # ROS publishing configuration
 PUBLISH_TO_WHEELS = True
 # Debug only, Turn this off, it needs lot of resources
-PUBLISH_MAIN_VISUALIZATION = False
-PUBLISH_ALL_VISUALIZATIONS = False
+PUBLISH_VISUALIZATIONS = False
 
 # Calibration files
 EXTRINSIC_CALIBRATION_FILE = Path(
