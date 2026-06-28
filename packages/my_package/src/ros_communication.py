@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
 import os
+
+import config
 import rospy
-from duckietown.dtros import DTROS, NodeType
-from sensor_msgs.msg import CompressedImage, Image, Range, CameraInfo
-from duckietown_msgs.msg import WheelsCmdStamped, WheelEncoderStamped
 from cv_bridge import CvBridge
-
-from process import process_all, get_modes
+from duckietown.dtros import DTROS, NodeType
+from duckietown_msgs.msg import WheelEncoderStamped, WheelsCmdStamped
 from image_utils import load_calibrations, unwarp_image
+from process import process_all
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Range
 
-PUBLISH_TO_WHEELS = True
-
-# Turn this off, it needs lot of resources
-PUBLISH_MAIN_VISUALIZATION = False
-PUBLISH_ALL_VISUALIZATIONS = False
-
-VIRTUAL, ENHANCED_LANE_DETECTION, OBJECT_DETECTION = get_modes()
 
 class ROSCommunication(DTROS):
     def __init__(self, node_name):
@@ -24,18 +18,15 @@ class ROSCommunication(DTROS):
         )
 
         self._last_process_time = rospy.Time(0)
-
-        hz = 5 if VIRTUAL else 15
-
-        self._process_interval = rospy.Duration(1.0 / hz)
+        self._process_interval = rospy.Duration(1.0 / config.HZ)
 
         self._vehicle_name = os.environ["VEHICLE_NAME"]
         self._bridge = CvBridge()
 
-        # Calibration data (loaded from CameraInfo topic)
-        self._K = None
-        self._D = None
-        self._calib_loaded = False
+        # Calibration data
+        self._K, self._D, self._P, self._H = load_calibrations(
+            config.INTRINSIC_CALIBRATION_FILE, config.EXTRINSIC_CALIBRATION_FILE
+        )
 
         # Latest messages from each topic, initialized to None
         self._image = None
@@ -50,12 +41,12 @@ class ROSCommunication(DTROS):
             queue_size=1,
         )
 
-        if PUBLISH_MAIN_VISUALIZATION:
+        if config.PUBLISH_MAIN_VISUALIZATION:
             self._vis_publisher = rospy.Publisher(
                 f"/{self._vehicle_name}/lane_detection/image/raw", Image, queue_size=1
             )
 
-        if PUBLISH_ALL_VISUALIZATIONS:
+        if config.PUBLISH_ALL_VISUALIZATIONS:
             self._edge_publisher = rospy.Publisher(
                 f"/{self._vehicle_name}/lane_detection/image/edges", Image, queue_size=1
             )
@@ -73,7 +64,9 @@ class ROSCommunication(DTROS):
             )
 
             self._yellow_publisher = rospy.Publisher(
-                f"/{self._vehicle_name}/lane_detection/image/yellow", Image, queue_size=1
+                f"/{self._vehicle_name}/lane_detection/image/yellow",
+                Image,
+                queue_size=1,
             )
 
             self._red_publisher = rospy.Publisher(
@@ -109,23 +102,11 @@ class ROSCommunication(DTROS):
         )
 
         # Publisher
-        if PUBLISH_TO_WHEELS:
+        if config.PUBLISH_TO_WHEELS:
             wheels_topic = f"/{self._vehicle_name}/wheels_driver_node/wheels_cmd"
-            self._wheel_publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
-
-    # --- Callbacks ---
-    def cb_camera_info(self, msg):
-        """Receive camera intrinsic calibration from ROS CameraInfo topic."""
-        if self._calib_loaded:
-            return
-        try:
-            self.sub_camera_info.unregister()
-        except BaseException:
-            pass
-
-        self._K, self._D = load_calibrations(msg)
-        self._calib_loaded = True
-        rospy.loginfo("[ros_communication] Camera intrinsics loaded from CameraInfo.")
+            self._wheel_publisher = rospy.Publisher(
+                wheels_topic, WheelsCmdStamped, queue_size=1
+            )
 
     def cb_camera(self, msg):
         now = rospy.Time.now()
@@ -165,11 +146,11 @@ class ROSCommunication(DTROS):
             red_mask,
             white_color,
         ) = process_all(self)
-        if PUBLISH_MAIN_VISUALIZATION:
+        if config.PUBLISH_MAIN_VISUALIZATION:
             self._vis_publisher.publish(
                 self._bridge.cv2_to_imgmsg(visualization, encoding="bgr8")
             )
-        if PUBLISH_ALL_VISUALIZATIONS:
+        if config.PUBLISH_ALL_VISUALIZATIONS:
             if edge_mask is not None:
                 self._edge_publisher.publish(
                     self._bridge.cv2_to_imgmsg(edge_mask, encoding="mono8")
@@ -186,13 +167,13 @@ class ROSCommunication(DTROS):
             self._red_publisher.publish(
                 self._bridge.cv2_to_imgmsg(red_mask, encoding="mono8")
             )
-        if PUBLISH_TO_WHEELS:
+        if config.PUBLISH_TO_WHEELS:
             self._wheel_publisher.publish(
                 WheelsCmdStamped(vel_left=vel_left, vel_right=vel_right)
             )
 
     def on_shutdown(self):
-        if PUBLISH_TO_WHEELS:
+        if config.PUBLISH_TO_WHEELS:
             stop = WheelsCmdStamped(vel_left=0, vel_right=0)
             self._wheel_publisher.publish(stop)
 

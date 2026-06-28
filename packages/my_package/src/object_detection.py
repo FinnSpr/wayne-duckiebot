@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 import onnxruntime as ort
 import rospkg
 
@@ -51,7 +52,6 @@ class ODModel:
         stop = False
 
         for x1, y1, x2, y2, score, id in detections:
-
             # print(f"Detection: {x1}-{x2}, {y1}-{y2}, {score}")
             # TODO we don't want to consider detections with confidence (score) below CONF_THRESHOLD (a value you should set in config.py)
 

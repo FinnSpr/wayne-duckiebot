@@ -4,20 +4,17 @@ Modular lane-following pipeline wrapper for Duckiebot.
 Acts as backward-compatible entry point.
 """
 
-from typing import Tuple, Optional
-import numpy as np
-import cv2
 import time
 
 import config
-from perception import PerceptionModule
-from world_model import WorldModel
-from planning import BehaviorPlanner, State
+import cv2
+import numpy as np
 from control import Controller
+from perception import PerceptionModule
+from planning import BehaviorPlanner, State
 from visualizer import Visualizer
+from world_model import WorldModel
 
-def get_modes():
-    return config.get_modes()
 
 class SelfDrivingPipeline:
     def __init__(self):
@@ -27,7 +24,18 @@ class SelfDrivingPipeline:
         self.controller = Controller()
         self.visualizer = Visualizer()
 
-    def process(self, data) -> Tuple[float, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def process(
+        self, data
+    ) -> tuple[
+        float,
+        float,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+        np.ndarray,
+    ]:
         # Determine image
         if config.ENHANCED_LANE_DETECTION:
             if hasattr(data, "_unwarped_image") and data._unwarped_image is not None:
@@ -35,11 +43,15 @@ class SelfDrivingPipeline:
             else:
                 image = data._image
             image_height, image_width = image.shape[:2]
-            white_lane_mask, yellow_mask, red_mask, edge_mask, white_color = self.perception.filter_lane_colors_enhanced(image)
+            white_lane_mask, yellow_mask, red_mask, edge_mask, white_color = (
+                self.perception.filter_lane_colors_enhanced(image)
+            )
         else:
             image = data._image
             image_height, image_width = image.shape[:2]
-            white_lane_mask, yellow_mask, red_mask = self.perception.filter_lane_colors_standard(image)
+            white_lane_mask, yellow_mask, red_mask = (
+                self.perception.filter_lane_colors_standard(image)
+            )
             white_color = white_lane_mask
             edge_mask = None
 
@@ -49,10 +61,12 @@ class SelfDrivingPipeline:
         object_detected = self.perception.check_obstacle(image)
 
         # Apply Region of Interest (ROI) mask in DRIVE or CROSS (with enhanced) state
-        if self.planner.state == State.DRIVE or (self.planner.state == State.CROSS and config.ENHANCED_LANE_DETECTION):
-            white_lane_mask[:config.HIDE_TOP_OF_IMAGE, :] = 0
-            yellow_mask[:config.HIDE_TOP_OF_IMAGE, :] = 0
-            red_mask[:config.HIDE_TOP_OF_IMAGE, :] = 0
+        if self.planner.state == State.DRIVE or (
+            self.planner.state == State.CROSS and config.ENHANCED_LANE_DETECTION
+        ):
+            white_lane_mask[: config.HIDE_TOP_OF_IMAGE, :] = 0
+            yellow_mask[: config.HIDE_TOP_OF_IMAGE, :] = 0
+            red_mask[: config.HIDE_TOP_OF_IMAGE, :] = 0
 
         # Update FSM transitions
         self.planner.update_state(red_mask)
@@ -62,20 +76,35 @@ class SelfDrivingPipeline:
             red_mask = self.perception.filter_red(raw_hsv)
 
         # Modeling lanes via Spline fitting
-        white_spline = self.world_model.fit_spline(white_lane_mask, take_leftmost_pixels=False)
-        yellow_spline = self.world_model.fit_spline(yellow_mask, take_leftmost_pixels=True)
+        white_spline = self.world_model.fit_spline(
+            white_lane_mask, take_leftmost_pixels=False
+        )
+        yellow_spline = self.world_model.fit_spline(
+            yellow_mask, take_leftmost_pixels=True
+        )
 
         # Waypoint computation
         if not self.planner.crossing_decision:
             if self.planner.state == State.TURN:
                 visualization = self.visualizer.visualize(
-                    image, white_lane_mask, yellow_mask, red_mask,
-                    white_spline, yellow_spline, None
+                    image,
+                    white_lane_mask,
+                    yellow_mask,
+                    red_mask,
+                    white_spline,
+                    yellow_spline,
+                    None,
                 )
                 self.planner.time_last_waypoint = time.time()
                 return (
-                    0.0, config.TURN_SPEED_RIGHT_WHEEL, visualization, edge_mask,
-                    white_lane_mask, yellow_mask, red_mask, white_color
+                    0.0,
+                    config.TURN_SPEED_RIGHT_WHEEL,
+                    visualization,
+                    edge_mask,
+                    white_lane_mask,
+                    yellow_mask,
+                    red_mask,
+                    white_color,
                 )
 
             # Extract stop lines as structured entities
@@ -87,19 +116,34 @@ class SelfDrivingPipeline:
 
             if waypoints is None:
                 visualization = self.visualizer.visualize(
-                    image, white_lane_mask, yellow_mask, red_mask,
-                    white_spline, yellow_spline, None
+                    image,
+                    white_lane_mask,
+                    yellow_mask,
+                    red_mask,
+                    white_spline,
+                    yellow_spline,
+                    None,
                 )
                 return (
-                    0.0, 0.0, visualization, edge_mask,
-                    white_lane_mask, yellow_mask, red_mask, white_color
+                    0.0,
+                    0.0,
+                    visualization,
+                    edge_mask,
+                    white_lane_mask,
+                    yellow_mask,
+                    red_mask,
+                    white_color,
                 )
 
             # Control: Estimate heading error
-            heading_error = self.controller.estimate_heading_error(waypoints, image_width, image_height)
+            heading_error = self.controller.estimate_heading_error(
+                waypoints, image_width, image_height
+            )
             # Control: Calculate velocities
-            is_stopped = (self.planner.state == State.STOP)
-            vel_left, vel_right = self.controller.heading_to_wheel_commands(heading_error, is_stopped)
+            is_stopped = self.planner.state == State.STOP
+            vel_left, vel_right = self.controller.heading_to_wheel_commands(
+                heading_error, is_stopped
+            )
 
             # Store computed velocities in case we transition to crossing decision
             self.planner.crossing_vel_left = vel_left
@@ -109,7 +153,9 @@ class SelfDrivingPipeline:
         if self.planner.crossing_decision:
             red_lines = self.world_model.extract_red_lines(red_mask)
             if not self.planner.intersection_admitted:
-                self.planner.intersection_admitted = self.planner.can_intersect(image, red_lines)
+                self.planner.intersection_admitted = self.planner.can_intersect(
+                    image, red_lines
+                )
 
             if self.planner.intersection_admitted:
                 vel_left = self.planner.crossing_vel_left
@@ -125,9 +171,12 @@ class SelfDrivingPipeline:
 
         # Handle Blocking State (Collision Avoidance / Stop for obstacles)
         is_blocked = False
-        if tof is not None and config.TOF_THRESHOLD > 0.0:
-            if tof < config.TOF_THRESHOLD:
-                is_blocked = True
+        if (
+            tof is not None
+            and config.TOF_THRESHOLD > 0.0
+            and tof < config.TOF_THRESHOLD
+        ):
+            is_blocked = True
         if object_detected:
             is_blocked = True
 
@@ -139,19 +188,36 @@ class SelfDrivingPipeline:
 
         # Visualization
         visualization = self.visualizer.visualize(
-            image, white_lane_mask, yellow_mask, red_mask,
-            white_spline, yellow_spline, waypoints
+            image,
+            white_lane_mask,
+            yellow_mask,
+            red_mask,
+            white_spline,
+            yellow_spline,
+            waypoints,
         )
 
         self.planner.blocked_state_last_time = time.time()
 
         return (
-            vel_left, vel_right, visualization, edge_mask,
-            white_lane_mask, yellow_mask, red_mask, white_color
+            vel_left,
+            vel_right,
+            visualization,
+            edge_mask,
+            white_lane_mask,
+            yellow_mask,
+            red_mask,
+            white_color,
         )
+
 
 # Persistent singleton instance for ROS callback persistence
 _pipeline = SelfDrivingPipeline()
 
-def process_all(data) -> Tuple[float, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+
+def process_all(
+    data,
+) -> tuple[
+    float, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray
+]:
     return _pipeline.process(data)

@@ -1,12 +1,43 @@
+import os
+from pathlib import Path
+
 import numpy as np
+
 
 # Modes configuration
 VIRTUAL = True
-ENHANCED_LANE_DETECTION = False
+ENHANCED_LANE_DETECTION = True
 OBJECT_DETECTION = False
 
-def get_modes():
-    return VIRTUAL, ENHANCED_LANE_DETECTION, OBJECT_DETECTION
+HZ = 5 if VIRTUAL else 15
+
+# Testing locally, no ROS
+LOCAL_TESTING = os.environ.get("LOCAL_TESTING", "false").lower() == "true"
+TEST_DATA_ROOT = Path(__file__).parent / "test_data"
+TEST_DATA_DIR = TEST_DATA_ROOT / "virtual" if VIRTUAL else TEST_DATA_ROOT / "physical"
+
+
+# ROS publishing configuration
+PUBLISH_TO_WHEELS = True
+# Debug only, Turn this off, it needs lot of resources
+PUBLISH_MAIN_VISUALIZATION = False
+PUBLISH_ALL_VISUALIZATIONS = False
+
+# Calibration files
+EXTRINSIC_CALIBRATION_FILE = Path(
+    "/data/config/calibrations/camera_extrinsic/default.yaml"
+    if VIRTUAL
+    else "/data/config/calibrations/camera_extrinsic/wayne.yaml"  # TODO: fix this path
+)
+INTRINSIC_CALIBRATION_FILE = Path(
+    "/data/config/calibrations/camera_intrinsic/default.yaml"
+    if VIRTUAL
+    else "/data/config/calibrations/camera_intrinsic/wayne.yaml"  # TODO: fix this path
+)
+if LOCAL_TESTING:
+    EXTRINSIC_CALIBRATION_FILE = TEST_DATA_DIR / "extrinsic.yaml"
+    INTRINSIC_CALIBRATION_FILE = TEST_DATA_DIR / "intrinsic.yaml"
+
 
 # Hyperparameters dependent on VIRTUAL
 if VIRTUAL:
@@ -50,8 +81,8 @@ if VIRTUAL and not ENHANCED_LANE_DETECTION:
     IMAGE_WIDTH_OFFSET_FACTOR_YELLOW = 0.25
     IMAGE_WIDTH_OFFSET_FACTOR_WHITE = 0.25
 elif VIRTUAL and ENHANCED_LANE_DETECTION:
-    BASE_SPEED = 0.25
-    STEERING_GAIN = 0.15
+    BASE_SPEED = 0.2
+    STEERING_GAIN = 0.1
 elif not VIRTUAL and not ENHANCED_LANE_DETECTION:
     BASE_SPEED = 0.1
     STEERING_GAIN = 0.25
