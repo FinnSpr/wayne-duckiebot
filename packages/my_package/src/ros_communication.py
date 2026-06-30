@@ -7,7 +7,7 @@ import rospy
 from cv_bridge import CvBridge
 from duckietown.dtros import DTROS, NodeType
 from duckietown_msgs.msg import WheelEncoderStamped, WheelsCmdStamped
-from image_utils import load_calibrations
+from image_utils import BEVConfig, load_calibrations
 from process import SelfDrivingPipeline
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image
 
@@ -25,6 +25,9 @@ class ROSCommunication(DTROS):
         # Calibration data
         self._K, self._D, self._P, self._H = load_calibrations(
             config.INTRINSIC_CALIBRATION_FILE, config.EXTRINSIC_CALIBRATION_FILE
+        )
+        self.bev_cfg = BEVConfig(
+            bev_size=config.BEV_SIZE, bev_resolution=config.BEV_RESOLUTION
         )
 
         # Self-driving pipeline

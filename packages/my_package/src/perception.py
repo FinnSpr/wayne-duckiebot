@@ -1,17 +1,18 @@
+import config
 import cv2
 import numpy as np
-from typing import Tuple
-import config
+from object_detection import ODModel
+
 
 class PerceptionModule:
     """
     Perception Module.
     Handles image processing, color filtering, edge detection, and obstacle detection.
     """
+
     def __init__(self, use_object_detection: bool = False):
         self.use_object_detection = use_object_detection
         if self.use_object_detection:
-            from object_detection import ODModel
             self.od_model = ODModel()
         else:
             self.od_model = None
@@ -22,7 +23,9 @@ class PerceptionModule:
         mask2 = cv2.inRange(hsv, config.RED_HSV_LOWER_2, config.RED_HSV_UPPER_2)
         return cv2.bitwise_or(mask1, mask2)
 
-    def filter_lane_colors_enhanced(self, image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def filter_lane_colors_enhanced(
+        self, image: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Enhanced lane filtering using Sobel edge magnitudes and HSV color masks."""
         blurred = cv2.GaussianBlur(image, (0, 0), sigmaX=config.SIGMA)
         gray = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
@@ -37,11 +40,15 @@ class PerceptionModule:
 
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
         white_color = cv2.inRange(hsv, config.WHITE_HSV_LOWER, config.WHITE_HSV_UPPER)
-        yellow_color = cv2.inRange(hsv, config.YELLOW_HSV_LOWER, config.YELLOW_HSV_UPPER)
+        yellow_color = cv2.inRange(
+            hsv, config.YELLOW_HSV_LOWER, config.YELLOW_HSV_UPPER
+        )
         white_color = cv2.bitwise_and(white_color, cv2.bitwise_not(yellow_color))
 
         if config.VIRTUAL:
-            green_mask = cv2.inRange(hsv, config.GREEN_HSV_LOWER, config.GREEN_HSV_UPPER)
+            green_mask = cv2.inRange(
+                hsv, config.GREEN_HSV_LOWER, config.GREEN_HSV_UPPER
+            )
             white_color = cv2.bitwise_or(white_color, green_mask)
 
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -68,7 +75,9 @@ class PerceptionModule:
 
         return right_edge_white_lane, yellow_mask, red_color, edge_mask, white_color
 
-    def filter_lane_colors_standard(self, image: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def filter_lane_colors_standard(
+        self, image: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Standard lane filtering using simple HSV ranges."""
         _, width = image.shape[:2]
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)

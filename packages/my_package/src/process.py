@@ -9,8 +9,8 @@ import time
 import config
 import cv2
 import numpy as np
+import image_utils
 from control import Controller
-from image_utils import unwarp_image
 from perception import PerceptionModule
 from planning import BehaviorPlanner, State
 from visualizer import Visualizer
@@ -18,13 +18,14 @@ from world_model import WorldModel
 
 
 class SelfDrivingPipeline:
-    _COLOR_VIS_NAMES = ("visualization", "unwarped_image")
+    _COLOR_VIS_NAMES = ("visualization", "unwarped_image", "image")
     _BW_VIS_NAMES = (
         "edge_mask",
         "white_lane_mask",
         "yellow_mask",
         "red_mask",
         "white_color",
+        "bev_mask",
     )
 
     def __init__(
@@ -33,11 +34,13 @@ class SelfDrivingPipeline:
         D: np.ndarray,
         P: np.ndarray,
         H: np.ndarray,
+        bev_config: image_utils.BEVConfig,
     ):
         self._K = K
         self._D = D
         self._P = P
         self._H = H
+        self.bev_config = bev_config
         self.perception = PerceptionModule(use_object_detection=config.OBJECT_DETECTION)
         self.world_model = WorldModel()
         self.planner = BehaviorPlanner()
@@ -65,7 +68,7 @@ class SelfDrivingPipeline:
         image: np.ndarray,
     ) -> tuple[float, float, dict[str, np.ndarray], dict[str, np.ndarray]]:
         # Unwarp (undistort) the image
-        unwarped_image = unwarp_image(image, self._K, self._D, self._P)
+        unwarped_image = image_utils.unwarp_image(image, self._K, self._D, self._P)
 
         # Determine which image to use for processing
         if config.ENHANCED_LANE_DETECTION:
@@ -83,8 +86,9 @@ class SelfDrivingPipeline:
             white_color = white_lane_mask
             edge_mask = None
 
-        # Check for obstacles (Object Detection)
-        object_detected = self.perception.check_obstacle(proc_image)
+        # # Check for obstacles (Object Detection)
+        # object_detected = self.perception.check_obstacle(proc_image)
+        bev_mask = image_utils.project_mask_to_bev(edge_mask, self._H, self.bev_config)
 
         # Apply Region of Interest (ROI) mask in DRIVE or CROSS (with enhanced) state
         if self.planner.state == State.DRIVE or (

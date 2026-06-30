@@ -37,6 +37,25 @@ if LOCAL_TESTING:
     EXTRINSIC_CALIBRATION_FILE = TEST_DATA_DIR / "extrinsic.yaml"
     INTRINSIC_CALIBRATION_FILE = TEST_DATA_DIR / "intrinsic.yaml"
 
+# OD Model
+if LOCAL_TESTING:
+    OD_MODEL_PATH = TEST_DATA_DIR / "od_model.onnx"
+else:
+    # TODO: set correct paths
+    import rospkg
+
+    rospack = rospkg.RosPack()
+    PKG_ROOT = Path(rospack.get_path("my_package"))
+    MODEL_PATH = PKG_ROOT / "object_detection.onnx"
+OD_CONF_THRESHOLD = 0.4
+
+# Duckietown constants
+LANE_WIDTH = 0.21  # 21 cm
+TILE_WIDTH = 0.61  # 61 cm
+
+# BEV ROI for obstacle avoidance
+BEV_SIZE = (TILE_WIDTH * 2, TILE_WIDTH * 2)  # meters (width, height/ahead)
+BEV_RESOLUTION = 0.002  # 0.2 cm per pixel
 
 # Hyperparameters dependent on VIRTUAL
 if VIRTUAL:
