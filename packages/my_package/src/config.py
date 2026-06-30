@@ -3,7 +3,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 # Modes configuration
 VIRTUAL = True
 ENHANCED_LANE_DETECTION = True
@@ -13,7 +12,7 @@ HZ = 5 if VIRTUAL else 15
 
 # Testing locally, no ROS
 LOCAL_TESTING = os.environ.get("LOCAL_TESTING", "false").lower() == "true"
-TEST_DATA_ROOT = Path(__file__).parent / "test_data"
+TEST_DATA_ROOT = Path(__file__).parent.parent.parent.parent / "test_data"
 TEST_DATA_DIR = TEST_DATA_ROOT / "virtual" if VIRTUAL else TEST_DATA_ROOT / "physical"
 
 
