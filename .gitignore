@@ -1,3 +1,10 @@
+*.onnx
+test_data/*.jpg
+test_data/*.png
+package.json
+package-lock.json
+.vscode
+
 docs/build
 *pyc
 
