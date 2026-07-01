@@ -1,12 +1,50 @@
+from typing import Optional, Tuple
+
 import cv2
 import numpy as np
-from typing import Optional, Tuple
+
+
+def draw_trajectory(
+    image: np.ndarray,
+    trajectory: np.ndarray,
+    color: tuple[int, int, int] = (0, 0, 0),
+    radius: int = 3,
+    thickness: int = 2,
+) -> np.ndarray:
+    """
+    Overlay a trajectory on an RGB image.
+
+    Draws dots at each waypoint connected by lines.
+
+    Args:
+        image: (H, W, 3) uint8 BGR/RGB image.
+        trajectory: (N, 2) array of pixel coordinates (u, v) = (col, row).
+        color: BGR tuple for the overlay (default black).
+        radius: Radius of the waypoint dots.
+        thickness: Thickness of the connecting lines.
+
+    Returns:
+        A new (H, W, 3) image with the trajectory drawn on it.
+    """
+    out = image.copy()
+    pts = np.atleast_2d(np.asarray(trajectory, dtype=np.int32))
+    if pts.shape[0] < 2:
+        return out
+
+    for i in range(len(pts) - 1):
+        cv2.line(out, tuple(pts[i]), tuple(pts[i + 1]), color, thickness)
+    for i in range(len(pts)):
+        cv2.circle(out, tuple(pts[i]), radius, color, -1)
+
+    return out
+
 
 class Visualizer:
     """
     Visualizer Module.
     Generates debugging overlays showing detected lanes, splines, and planned waypoints.
     """
+
     def __init__(self):
         pass
 

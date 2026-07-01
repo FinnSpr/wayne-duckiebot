@@ -5,20 +5,20 @@ import onnxruntime as ort
 
 
 class ODModel:
-    def __init__(self):
+    def __init__(self, model_path: str = config.OD_MODEL_PATH):
         print("Initializing ODModel", flush=True)
 
-        if not config.MODEL_PATH.exists():
+        if not model_path.exists():
             raise FileNotFoundError(
                 "ONNX model not found (did you download your trained model?):",
-                config.MODEL_PATH,
+                model_path,
             )
 
         sess_opts = ort.SessionOptions()
         sess_opts.intra_op_num_threads = 1
 
         self.session = ort.InferenceSession(
-            str(config.MODEL_PATH),
+            str(model_path),
             sess_options=sess_opts,
             providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
         )
@@ -47,11 +47,14 @@ class ODModel:
         img = np.transpose(img, (2, 0, 1))[None, ...]
         return img
 
-    def get_detections(self, img_bgr: np.ndarray) -> np.ndarray:
+    def get_detections(
+        self, img_bgr: np.ndarray, threshold: float = config.OD_CONF_THRESHOLD
+    ) -> np.ndarray:
         """Runs OD model and returns detections with confidence over threshold.
 
         Args:
             img_bgr: BGR image from the Duckiebot camera (H x W x 3).
+            threshold: Confidence threshold for filtering detections.
 
         Returns:
             thresholded_detections: Numpy array of shape (N, 6) where each row is
@@ -59,7 +62,7 @@ class ODModel:
                 above the threshold.
         """
         detections = self._run_detector(img_bgr)
-        thresholded_detections = detections[detections[:, 4] >= config.CONF_THRESHOLD]
+        thresholded_detections = detections[detections[:, 4] >= threshold]
         return thresholded_detections
 
     def get_bottom_center_detections(self, img_bgr: np.ndarray) -> np.ndarray:

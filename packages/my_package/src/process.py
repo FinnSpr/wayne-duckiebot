@@ -8,12 +8,13 @@ import time
 
 import config
 import cv2
-import numpy as np
 import image_utils
+import numpy as np
 from control import Controller
+from obstacle_avoidance import cem_planner, get_planning_cost_function
 from perception import PerceptionModule
 from planning import BehaviorPlanner, State
-from visualizer import Visualizer
+from visualizer import Visualizer, draw_trajectory
 from world_model import WorldModel
 
 
@@ -22,9 +23,7 @@ class SelfDrivingPipeline:
     _BW_VIS_NAMES = (
         "edge_mask",
         "white_lane_mask",
-        "yellow_mask",
-        "red_mask",
-        "white_color",
+        "cost_heatmap",
         "bev_mask",
     )
 
@@ -74,27 +73,31 @@ class SelfDrivingPipeline:
         if config.ENHANCED_LANE_DETECTION:
             proc_image = unwarped_image
             image_height, image_width = proc_image.shape[:2]
-            white_lane_mask, yellow_mask, red_mask, edge_mask, white_color = (
-                self.perception.filter_lane_colors_enhanced(proc_image)
-            )
+            (
+                right_white_lane,
+                left_white_lane,
+                yellow_mask,
+                red_mask,
+                edge_mask,
+                white_color,
+            ) = self.perception.filter_lane_colors_enhanced(proc_image)
         else:
             proc_image = image
             image_height, image_width = proc_image.shape[:2]
-            white_lane_mask, yellow_mask, red_mask = (
+            right_white_lane, yellow_mask, red_mask = (
                 self.perception.filter_lane_colors_standard(proc_image)
             )
-            white_color = white_lane_mask
+            white_color = right_white_lane
             edge_mask = None
+            left_white_lane = None
 
-        # # Check for obstacles (Object Detection)
-        # object_detected = self.perception.check_obstacle(proc_image)
-        bev_mask = image_utils.project_mask_to_bev(edge_mask, self._H, self.bev_config)
-
+        # TODO: Sync this ROI with planning/avoidance homography based ROI
         # Apply Region of Interest (ROI) mask in DRIVE or CROSS (with enhanced) state
         if self.planner.state == State.DRIVE or (
             self.planner.state == State.CROSS and config.ENHANCED_LANE_DETECTION
         ):
-            white_lane_mask[: config.HIDE_TOP_OF_IMAGE, :] = 0
+            left_white_lane[: config.HIDE_TOP_OF_IMAGE, :] = 0
+            right_white_lane[: config.HIDE_TOP_OF_IMAGE, :] = 0
             yellow_mask[: config.HIDE_TOP_OF_IMAGE, :] = 0
             red_mask[: config.HIDE_TOP_OF_IMAGE, :] = 0
 
@@ -107,7 +110,7 @@ class SelfDrivingPipeline:
 
         # Modeling lanes via Spline fitting
         white_spline = self.world_model.fit_spline(
-            white_lane_mask, take_leftmost_pixels=False
+            right_white_lane, take_leftmost_pixels=False
         )
         yellow_spline = self.world_model.fit_spline(
             yellow_mask, take_leftmost_pixels=True
@@ -118,7 +121,7 @@ class SelfDrivingPipeline:
             if self.planner.state == State.TURN:
                 visualization = self.visualizer.visualize(
                     proc_image,
-                    white_lane_mask,
+                    right_white_lane,
                     yellow_mask,
                     red_mask,
                     white_spline,
@@ -144,7 +147,7 @@ class SelfDrivingPipeline:
             if waypoints is None:
                 visualization = self.visualizer.visualize(
                     proc_image,
-                    white_lane_mask,
+                    right_white_lane,
                     yellow_mask,
                     red_mask,
                     white_spline,
@@ -158,6 +161,31 @@ class SelfDrivingPipeline:
                     color_vis,
                     bw_vis,
                 )
+
+            # Obstacle
+            bev_mask = image_utils.project_mask_to_bev(
+                edge_mask, self._H, self.bev_config
+            )
+            detections_bottom_center = self.perception.get_bottom_center_detections(
+                proc_image
+            )
+            planning_cost_function = get_planning_cost_function(
+                left_white_lane,
+                right_white_lane,
+                detections_bottom_center,
+                waypoints[0],
+                self._H,
+                self.bev_config,
+            )
+            planned_trajectory, planned_actions = cem_planner(planning_cost_function)
+            planned_trajectory_bev = image_utils.world_to_bev_coords(
+                planned_trajectory, self.bev_config
+            )
+            cost_heatmap = image_utils.get_bev_heatmap_image(
+                planning_cost_function, self.bev_config
+            )
+            cost_heatmap = draw_trajectory(cost_heatmap, planned_trajectory_bev)
+            print(planned_trajectory)
 
             # Control: Estimate heading error
             heading_error = self.controller.estimate_heading_error(
@@ -204,7 +232,7 @@ class SelfDrivingPipeline:
         # Visualization
         visualization = self.visualizer.visualize(
             proc_image,
-            white_lane_mask,
+            cv2.bitwise_or(left_white_lane, right_white_lane),
             yellow_mask,
             red_mask,
             white_spline,

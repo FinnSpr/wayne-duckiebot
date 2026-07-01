@@ -56,24 +56,34 @@ class PerceptionModule:
 
         red_color = self.filter_red(hsv)
         white_edges = cv2.bitwise_and(white_color, edge_mask)
-        right_edge_white_lane = cv2.bitwise_and(
+        right_edge_right_white_lane = cv2.bitwise_and(
             white_edges, cv2.bitwise_and(mask_sobelx_neg, mask_sobely_pos)
+        )
+        left_edge_left_white_lane = cv2.bitwise_and(
+            white_edges, cv2.bitwise_and(mask_sobelx_pos, mask_sobely_pos)
         )
 
         if config.WHITE_LANE_ONLY_BIGGEST_COMPONENT:
-            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-                right_edge_white_lane
+            right_edge_white_lane = self._get_biggest_component(
+                right_edge_right_white_lane
             )
-            if num_labels > 1:
-                largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
-                right_edge_white_lane = (labels == largest_label).astype(np.uint8) * 255
+            left_edge_white_lane = self._get_biggest_component(
+                left_edge_left_white_lane
+            )
 
         yellow_mask = cv2.bitwise_and(yellow_color, edge_mask)
         yellow_mask = cv2.bitwise_and(
             yellow_mask, cv2.bitwise_and(mask_sobelx_pos, mask_sobely_pos)
         )
 
-        return right_edge_white_lane, yellow_mask, red_color, edge_mask, white_color
+        return (
+            right_edge_white_lane,
+            left_edge_left_white_lane,
+            yellow_mask,
+            red_color,
+            edge_mask,
+            white_color,
+        )
 
     def filter_lane_colors_standard(
         self, image: np.ndarray
@@ -96,8 +106,16 @@ class PerceptionModule:
 
         return white_mask, yellow_mask, red_mask
 
-    def check_obstacle(self, image: np.ndarray) -> bool:
-        """Check for obstacles using the object detection model."""
-        if self.use_object_detection and self.od_model:
-            return self.od_model.stop_for_object(image)
-        return False
+    def get_bottom_center_detections(self, img_bgr: np.ndarray) -> np.ndarray:
+        """Get bottom-center points of detected objects with confidence over threshold."""
+        if not self.use_object_detection:
+            raise RuntimeError("Object detection is not enabled.")
+        return self.od_model.get_bottom_center_detections(img_bgr)
+
+    def _get_biggest_component(self, mask: np.ndarray) -> np.ndarray:
+        """Return a binary mask of the biggest connected component."""
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+        if num_labels <= 1:
+            return np.zeros_like(mask)
+        largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+        return (labels == largest_label).astype(np.uint8) * 255

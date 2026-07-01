@@ -57,6 +57,9 @@ BOT_WIDTH = 0.1  # 10 cm
 # Obstacle avoidance
 LANE_POLY_EPSILON = 5.0  # pixels
 AVOIDANCE_MARGIN = 0.03  # 3 cm, margin from obstacles for path planning
+LAMBDA_OBSTACLES = 1000.0
+FREE_Y_THRESHOLD = BOT_WIDTH / 2 + AVOIDANCE_MARGIN + 0.001
+PLANNING_WEIGHT_FINAL_POSITION = 5.0
 
 # BEV ROI for obstacle avoidance
 BEV_SIZE = (TILE_WIDTH * 2, TILE_WIDTH * 2)  # meters (width, height/ahead)

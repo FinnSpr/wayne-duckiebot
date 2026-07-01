@@ -159,6 +159,163 @@ def build_image_to_bev_homography(
     return S @ H_image_to_metric
 
 
+def mask_to_positions(mask: np.ndarray) -> np.ndarray:
+    """
+    Extract (row, col) pixel coordinates of all nonzero elements in a mask.
+
+    Args:
+        mask: 2-D binary mask (any nonzero value counts as foreground).
+
+    Returns:
+        (N, 2) int64 array where each row is [row, col] (y, x in image space).
+        Returns an empty (0, 2) array if the mask is entirely zero.
+    """
+    return np.argwhere(mask)
+
+
+def positions_to_mask(positions: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """
+    Reconstruct a binary mask from a set of (row, col) positions.
+
+    Args:
+        positions: (N, 2) int array of [row, col] coordinates.
+        shape:      (height, width) of the output mask.
+
+    Returns:
+        uint8 binary mask of the given shape with 255 at the supplied positions.
+    """
+    mask = np.zeros(shape, dtype=np.uint8)
+    if positions.size == 0:
+        return mask
+    rows = positions[:, 0].astype(int)
+    cols = positions[:, 1].astype(int)
+    mask[rows, cols] = 255
+    return mask
+
+
+def world_to_bev_coords(points: np.ndarray, bev_cfg: "BEVConfig") -> np.ndarray:
+    """
+    Project points from world/metric coordinates to BEV image pixel coordinates.
+
+    Args:
+        points:  (N, 2) array of world points (x_forward, y_lateral).
+                 x_forward >= 0 is ahead of the robot.
+                 y_lateral > 0 is to the left of the robot.
+        bev_cfg: BEVConfig defining the BEV extent and resolution.
+
+    Returns:
+        (N, 2) float64 array of BEV pixel coordinates (u, v).
+        u = column (0 … bev_w_px-1), v = row (0 … bev_h_px-1).
+        Points outside the BEV region will map to out-of-bounds pixel values.
+    """
+    points = np.atleast_2d(np.asarray(points, dtype=np.float64))
+    if points.shape[1] != 2:
+        raise ValueError(f"Expected (N, 2) points, got {points.shape}")
+
+    u = -points[:, 1] / bev_cfg.bev_resolution + bev_cfg.bev_w_px / 2.0
+    v = bev_cfg.bev_h_px - points[:, 0] / bev_cfg.bev_resolution
+    return np.column_stack([u, v])
+
+
+def bev_to_world_coords(points: np.ndarray, bev_cfg: "BEVConfig") -> np.ndarray:
+    """
+    Project points from BEV image pixel coordinates back to world/metric coordinates.
+
+    Args:
+        points:  (N, 2) array of BEV pixel coordinates (u, v).
+                 u = column, v = row.
+        bev_cfg: BEVConfig defining the BEV extent and resolution.
+
+    Returns:
+        (N, 2) float64 array of world points (x_forward, y_lateral).
+    """
+    points = np.atleast_2d(np.asarray(points, dtype=np.float64))
+    if points.shape[1] != 2:
+        raise ValueError(f"Expected (N, 2) points, got {points.shape}")
+
+    x_forward = (bev_cfg.bev_h_px - points[:, 1]) * bev_cfg.bev_resolution
+    y_lateral = -(points[:, 0] - bev_cfg.bev_w_px / 2.0) * bev_cfg.bev_resolution
+    return np.column_stack([x_forward, y_lateral])
+
+
+def image_to_world_coords(
+    points: np.ndarray, H_image_to_metric: np.ndarray
+) -> np.ndarray:
+    """
+    Project image pixel coordinates to world/metric ground-plane coordinates.
+
+    Args:
+        points:             (N, 2) array of image pixel coordinates (u, v).
+                            u = column, v = row.
+        H_image_to_metric:  3×3 homography from camera extrinsic calibration.
+                            Maps image homogeneous → metric (x_forward, y_lateral).
+
+    Returns:
+        (N, 2) float64 array of world points (x_forward, y_lateral).
+    """
+    points = np.atleast_2d(np.asarray(points, dtype=np.float64))
+    if points.shape[1] != 2:
+        raise ValueError(f"Expected (N, 2) points, got {points.shape}")
+
+    homogeneous = np.column_stack([points[:, 0], points[:, 1], np.ones(len(points))])
+    projected = homogeneous @ H_image_to_metric.T  # (N, 3)
+    w = projected[:, 2:3]
+    w_safe = np.where(np.abs(w) < 1e-12, 1e-12, w)
+    world = projected[:, :2] / w_safe
+    return world
+
+
+def world_to_image_coords(
+    points: np.ndarray, H_image_to_metric: np.ndarray
+) -> np.ndarray:
+    """
+    Project world/metric ground-plane coordinates back to image pixel coordinates.
+
+    Args:
+        points:             (N, 2) array of world points (x_forward, y_lateral).
+        H_image_to_metric:  3×3 homography from camera extrinsic calibration.
+
+    Returns:
+        (N, 2) float64 array of image pixel coordinates (u, v).
+        Points behind the camera or at infinity are clipped at w=1e-12.
+    """
+    points = np.atleast_2d(np.asarray(points, dtype=np.float64))
+    if points.shape[1] != 2:
+        raise ValueError(f"Expected (N, 2) points, got {points.shape}")
+
+    H_metric_to_image = np.linalg.inv(H_image_to_metric)
+    homogeneous = np.column_stack([points[:, 0], points[:, 1], np.ones(len(points))])
+    projected = homogeneous @ H_metric_to_image.T
+    w = projected[:, 2:3]
+    w_safe = np.where(np.abs(w) < 1e-12, 1e-12, w)
+    image = projected[:, :2] / w_safe
+    return image
+
+
+def image_to_bev_coords(
+    points: np.ndarray,
+    H_image_to_metric: np.ndarray,
+    bev_cfg: "BEVConfig",
+) -> np.ndarray:
+    """
+    Project image pixel coordinates directly to BEV image pixel coordinates.
+
+    This is a composition of image → world (homography) and world → BEV
+    (metric scaling).  Equivalent to calling image_to_world_coords followed
+    by world_to_bev_coords.
+
+    Args:
+        points:             (N, 2) array of image pixel coordinates (u, v).
+        H_image_to_metric:  3×3 homography from camera extrinsic calibration.
+        bev_cfg:            BEVConfig defining the BEV extent and resolution.
+
+    Returns:
+        (N, 2) float64 array of BEV pixel coordinates (u_bev, v_bev).
+    """
+    world = image_to_world_coords(points, H_image_to_metric)
+    return world_to_bev_coords(world, bev_cfg)
+
+
 def project_mask_to_bev(
     mask: np.ndarray,
     H_image_to_metric: np.ndarray,
@@ -198,3 +355,76 @@ def project_mask_to_bev(
     )
 
     return bev_mask
+
+
+def get_bev_heatmap_image(
+    function_world_coords: callable,
+    bev_cfg: BEVConfig,
+    colormap: int = cv2.COLORMAP_JET,
+) -> np.ndarray:
+    """
+    Rasterize a vectorized scalar function over the BEV region into a
+    colour-mapped BGR image suitable for ``cv2.imshow``.
+
+    For every pixel ``(u, v)`` in the BEV image the corresponding world
+    coordinate is computed via :func:`bev_to_world_coords` and
+    ``function_world_coords`` is evaluated on the entire set of points at
+    once (the function must be vectorized: ``(N, 2) → (N,)``).
+
+    Finite values are normalised to ``[0, 255]`` and mapped through the
+    chosen OpenCV colormap.  Pixels whose value is ``+∞``, ``-∞`` or
+    ``NaN`` are rendered as **black** (0, 0, 0).
+
+    Args:
+        function_world_coords:
+            Vectorized callable ``f(points)`` where ``points`` has shape
+            ``(N, 2)`` (columns: ``x_forward, y_lateral``) and returns a
+            1-D ``np.ndarray`` of ``N`` scalars.  Example::
+
+                def gaussian(points):
+                    return np.exp(-np.sum(points ** 2, axis=1))
+
+        bev_cfg:
+            BEVConfig defining the extent and resolution of the output.
+        colormap:
+            OpenCV colormap flag (default ``cv2.COLORMAP_JET``).
+
+    Returns:
+        ``np.ndarray`` of shape ``(bev_h_px, bev_w_px, 3)`` with dtype
+        ``uint8``, ready for display or saving as an image.
+    """
+    W, H = bev_cfg.bev_w_px, bev_cfg.bev_h_px
+
+    # Build the full grid of BEV pixel coordinates (u, v).
+    u_grid, v_grid = np.meshgrid(np.arange(W), np.arange(H))  # both (H, W)
+    pixels = np.column_stack([u_grid.ravel(), v_grid.ravel()])  # (N, 2)
+
+    # Convert every pixel to its world-coordinate equivalent.
+    world = bev_to_world_coords(pixels, bev_cfg)
+
+    # Evaluate the vectorized function on all points at once.
+    values = np.asarray(function_world_coords(world), dtype=np.float64).reshape(H, W)
+
+    # Identify pixels that should be black.
+    inf_mask = ~np.isfinite(values)  # True for ±inf and NaN
+
+    # Normalise the *finite* portion to [0, 255].
+    finite = values[~inf_mask]
+    if finite.size == 0:
+        return np.zeros((H, W, 3), dtype=np.uint8)
+
+    vmin, vmax = finite.min(), finite.max()
+    if vmax - vmin < 1e-12:
+        norm = np.zeros_like(finite, dtype=np.uint8)
+    else:
+        norm = ((finite - vmin) / (vmax - vmin) * 255).astype(np.uint8)
+
+    # Build a uint8 single-channel image for the colormap.
+    gray = np.zeros((H, W), dtype=np.uint8)
+    gray[~inf_mask] = norm
+
+    # Apply colormap, then stamp black over inf pixels.
+    colour = cv2.applyColorMap(gray, colormap)
+    colour[inf_mask] = (0, 0, 0)
+
+    return colour
