@@ -4,6 +4,35 @@ import image_utils
 import numpy as np
 
 # TODO: add offset from (0, 0) to front of bot
+# TODO: should probably add cost for the heading of the bot
+
+
+def get_trajectories_score(
+    trajectories: np.ndarray,
+    cost_function: callable,
+    weight_final: float = config.PLANNING_WEIGHT_FINAL_POSITION,
+) -> np.ndarray:
+    """
+    Score a batch of trajectories using a point-wise cost function.
+
+    score_i = sum(cost(trajectories[i, :-1])) + weight_final * cost(trajectories[i, -1])
+
+    Args:
+        trajectories: (N, L, 2) array of waypoints in world coordinates.
+        cost_function: f(points) -> (M,) costs, where points is (M, 2).
+        weight_final: Multiplier for the final waypoint cost.
+
+    Returns:
+        (N,) float64 trajectory scores.
+    """
+    N, L, _ = trajectories.shape
+
+    flat = trajectories.reshape(-1, 2)  # (N*L, 2)
+    costs = np.asarray(cost_function(flat), dtype=np.float64).reshape(N, L)
+
+    interior = costs[:, :-1].sum(axis=1)  # sum of all but last
+    final = costs[:, -1] * weight_final  # weighted last
+    return interior + final
 
 
 def get_planning_cost_function(
@@ -17,6 +46,8 @@ def get_planning_cost_function(
     bot_width: float = config.BOT_WIDTH,
     avoidance_margin: float = config.AVOIDANCE_MARGIN,
     polyline_epsilon: float = config.LANE_POLY_EPSILON,
+    lambda_obstacle_distance: float = config.LAMBDA_OBSTACLES,
+    lambda_polygon_distance: float = config.LAMBDA_OBSTACLES,
 ):
     """
     Build a vectorized cost function for BEV planning.
@@ -26,8 +57,8 @@ def get_planning_cost_function(
     lanes fall back to the BEV ROI edges.
 
     cv2.pointPolygonTest computes the signed distance of each query point
-    to the polygon boundary. Points outside the polygon or too close to its
-    edge receive cost inf.
+    to the polygon boundary. These distances (and obstacle distances) are
+    converted to soft quadratic penalties instead of hard inf barriers.
 
     Args:
         left_lane_mask: (H, W) uint8 binary mask of the left lane marking.
@@ -43,6 +74,8 @@ def get_planning_cost_function(
         bot_width: Robot width in metres.
         avoidance_margin: Extra planning margin in metres.
         polyline_epsilon: approxPolyDP tolerance in pixels.
+        lambda_obstacle_distance: Weight for obstacle proximity penalty.
+        lambda_polygon_distance: Weight for polygon proximity penalty.
 
     Returns:
         Callable f(points) where points is (N, 2) world coordinates and
@@ -77,6 +110,8 @@ def get_planning_cost_function(
             obstacle_radius,
             bot_width,
             avoidance_margin,
+            lambda_obstacle_distance,
+            lambda_polygon_distance,
         )
 
     return cost_function
@@ -90,52 +125,55 @@ def planning_cost_function(
     obstacle_radius: float,
     bot_width: float,
     avoidance_margin: float,
+    lambda_obstacle_distance: float = 1.0,
+    lambda_polygon_distance: float = 1.0,
 ) -> np.ndarray:
     """
-    Cost for each query position: inf if forbidden, else distance to goal.
+    Soft navigation cost for each query position.
 
-    A position is forbidden if:
-    - Too close to any obstacle (within obstacle_radius + bot_width/2
-      + avoidance_margin).
-    - Outside the drivable polygon.
-    - Inside but closer than bot_width/2 + avoidance_margin to the
-      polygon boundary.
+    cost = dist_to_goal
+         + max(0, obs_threshold - min_obs_dist)^2 * lambda_obstacle_distance
+         + max(0, lane_margin - poly_dist)^2 * lambda_polygon_distance
+
+    obs_threshold = obstacle_radius + bot_width/2 + avoidance_margin
+    lane_margin   = bot_width/2 + avoidance_margin
 
     Args:
         positions: (N, 2) world coordinates (x_forward, y_lateral).
         obstacle_positions: (M, 2) obstacle locations in world frame.
             May be empty (0, 2).
-        drivable_polygon: (K, 1, 2) contour of the drivable area in
-            world coordinates.
+        drivable_polygon: (K, 1, 2) contour of the drivable area.
         goal_position: (2,) world coordinate of the goal.
         obstacle_radius: Safety radius around each obstacle (metres).
         bot_width: Robot width (metres).
         avoidance_margin: Extra margin (metres).
+        lambda_obstacle_distance: Weight for obstacle proximity penalty.
+        lambda_polygon_distance: Weight for polygon proximity penalty.
 
     Returns:
-        (N,) float64 costs: inf in forbidden regions, Euclidean distance
-        to goal elsewhere.
+        (N,) float64 costs.
     """
     positions = np.atleast_2d(np.asarray(positions, dtype=np.float64))
     obstacle_positions = np.atleast_2d(np.asarray(obstacle_positions, dtype=np.float64))
     goal_position = np.asarray(goal_position, dtype=np.float64).ravel()
 
-    dist_to_goal = np.linalg.norm(positions - goal_position, axis=1)
-    forbidden = np.zeros(len(positions), dtype=bool)
+    cost = np.linalg.norm(positions - goal_position, axis=1)
 
+    # --- soft obstacle penalty ---
+    obs_threshold = obstacle_radius + bot_width / 2.0 + avoidance_margin
     if obstacle_positions.size > 0:
         diff = positions[:, np.newaxis, :] - obstacle_positions[np.newaxis, :, :]
         dist_to_obs = np.linalg.norm(diff, axis=2)
         min_obs_dist = dist_to_obs.min(axis=1)
-        forbidden |= min_obs_dist < (
-            obstacle_radius + bot_width / 2.0 + avoidance_margin
-        )
+        penalty_obs = np.maximum(0.0, obs_threshold - min_obs_dist)
+        cost += penalty_obs * lambda_obstacle_distance
 
+    # --- soft polygon penalty ---
     lane_margin = bot_width / 2.0 + avoidance_margin
     poly_dist = _polygon_distance(positions, drivable_polygon)
-    forbidden |= poly_dist < lane_margin
+    penalty_poly = np.maximum(0.0, lane_margin - poly_dist)
+    cost += penalty_poly * lambda_polygon_distance
 
-    cost = np.where(forbidden, np.inf, dist_to_goal)
     return cost
 
 
