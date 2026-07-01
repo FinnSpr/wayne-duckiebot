@@ -83,4 +83,8 @@ class ODModel:
             bottom_center_x = (x1 + x2) / 2
             bottom_center_y = y2
             bottom_center_detections.append([bottom_center_x, bottom_center_y])
-        return np.array(bottom_center_detections)
+        return (
+            np.stack(bottom_center_detections)
+            if bottom_center_detections
+            else np.empty((0, 2))
+        )
