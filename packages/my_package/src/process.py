@@ -54,6 +54,7 @@ class SelfDrivingPipeline:
             yellow_mask[:config.HIDE_TOP_OF_IMAGE, :] = 0
             red_mask[:config.HIDE_TOP_OF_IMAGE, :] = 0
 
+        self.planner.set_ticks(data._left_encoder, data._right_encoder)
         # Update FSM transitions
         self.planner.update_state(red_mask)
 
@@ -74,7 +75,7 @@ class SelfDrivingPipeline:
                 )
                 self.planner.time_last_waypoint = time.time()
                 return (
-                    0.0, config.TURN_SPEED_RIGHT_WHEEL, visualization, edge_mask,
+                    config.TURN_SPEED_LEFT_WHEEL, config.TURN_SPEED_RIGHT_WHEEL, visualization, edge_mask,
                     white_lane_mask, yellow_mask, red_mask, white_color
                 )
 
