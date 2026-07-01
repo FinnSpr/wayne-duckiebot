@@ -6,7 +6,7 @@ import numpy as np
 # Modes configuration
 VIRTUAL = True
 ENHANCED_LANE_DETECTION = True
-OBJECT_DETECTION = False
+OBJECT_DETECTION = True
 
 HZ = 5 if VIRTUAL else 15
 
@@ -51,6 +51,12 @@ OD_CONF_THRESHOLD = 0.4
 # Duckietown constants
 LANE_WIDTH = 0.21  # 21 cm
 TILE_WIDTH = 0.61  # 61 cm
+DUCKIE_RADIUS = 0.025  # 2.5 cm
+BOT_WIDTH = 0.1  # 10 cm
+
+# Obstacle avoidance
+LANE_POLY_EPSILON = 5.0  # pixels
+AVOIDANCE_MARGIN = 0.03  # 3 cm, margin from obstacles for path planning
 
 # BEV ROI for obstacle avoidance
 BEV_SIZE = (TILE_WIDTH * 2, TILE_WIDTH * 2)  # meters (width, height/ahead)
@@ -115,7 +121,7 @@ CROSSING_OFFSET_TOP = np.array([110, 0])
 
 # Global parameters
 MAX_SPEED_DIFF = 0.2
-WHITE_LANE_ONLY_BIGGEST_COMPONENT = False
+WHITE_LANE_ONLY_BIGGEST_COMPONENT = True
 N_WAYPOINTS = 6
 SINGLE_LANE_SCALE_FACTOR_WHITE = 0.65
 SINGLE_LANE_SCALE_FACTOR_YELLOW = 0.6
