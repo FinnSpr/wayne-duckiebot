@@ -4,6 +4,7 @@ import rospy
 from duckietown.dtros import DTROS, NodeType
 from sensor_msgs.msg import CompressedImage, Image, Range, CameraInfo
 from duckietown_msgs.msg import WheelsCmdStamped, WheelEncoderStamped
+from duckietown_msgs.msg import Twist2DStamped, WheelEncoderStamped
 from cv_bridge import CvBridge
 
 from process import process_all, get_modes
@@ -15,7 +16,9 @@ PUBLISH_TO_WHEELS = True
 PUBLISH_MAIN_VISUALIZATION = False
 PUBLISH_ALL_VISUALIZATIONS = False
 
-VIRTUAL, ENHANCED_LANE_DETECTION, OBJECT_DETECTION = get_modes()
+VIRTUAL, ENHANCED_LANE_DETECTION, OBJECT_DETECTION, USE_TWIST = get_modes()
+
+print("USING TWIST:", USE_TWIST)
 
 class ROSCommunication(DTROS):
     def __init__(self, node_name):
@@ -110,8 +113,12 @@ class ROSCommunication(DTROS):
 
         # Publisher
         if PUBLISH_TO_WHEELS:
-            wheels_topic = f"/{self._vehicle_name}/wheels_driver_node/wheels_cmd"
-            self._wheel_publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
+            if USE_TWIST:
+                wheels_topic = f"/{self._vehicle_name}/car_cmd_switch_node/cmd"
+                self._wheel_publisher = rospy.Publisher(wheels_topic, Twist2DStamped, queue_size=1)
+            else:
+                wheels_topic = f"/{self._vehicle_name}/wheels_driver_node/wheels_cmd"
+                self._wheel_publisher = rospy.Publisher(wheels_topic, WheelsCmdStamped, queue_size=1)
 
     # --- Callbacks ---
     def cb_camera_info(self, msg):
@@ -187,13 +194,25 @@ class ROSCommunication(DTROS):
                 self._bridge.cv2_to_imgmsg(red_mask, encoding="mono8")
             )
         if PUBLISH_TO_WHEELS:
-            self._wheel_publisher.publish(
-                WheelsCmdStamped(vel_left=vel_left, vel_right=vel_right)
-            )
+            if USE_TWIST:
+                v = vel_left
+                omega = vel_right
+                cmd = Twist2DStamped()
+                cmd.header.stamp = rospy.Time.now()
+                cmd.v = v
+                cmd.omega = omega
+                self._wheel_publisher.publish(cmd)
+            else:
+                self._wheel_publisher.publish(
+                    WheelsCmdStamped(vel_left=vel_left, vel_right=vel_right)
+                )
 
     def on_shutdown(self):
         if PUBLISH_TO_WHEELS:
-            stop = WheelsCmdStamped(vel_left=0, vel_right=0)
+            if USE_TWIST:
+                stop = Twist2DStamped(v=0.0, omega=0.0)
+            else:
+                stop = WheelsCmdStamped(vel_left=0, vel_right=0)
             self._wheel_publisher.publish(stop)
 
 

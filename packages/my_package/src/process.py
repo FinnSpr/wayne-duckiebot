@@ -73,10 +73,16 @@ class SelfDrivingPipeline:
                     white_spline, yellow_spline, None
                 )
                 self.planner.time_last_waypoint = time.time()
-                return (
-                    0.0, config.TURN_SPEED_RIGHT_WHEEL, visualization, edge_mask,
+                if config.USE_TWIST:
+                    return (
+                    0.0, config.TURN_OMEGA, visualization, edge_mask,
                     white_lane_mask, yellow_mask, red_mask, white_color
                 )
+                else:
+                    return (
+                        0.0, config.TURN_SPEED_RIGHT_WHEEL, visualization, edge_mask,
+                        white_lane_mask, yellow_mask, red_mask, white_color
+                    )
 
             # Extract stop lines as structured entities
             red_lines = self.world_model.extract_red_lines(red_mask)
@@ -99,11 +105,18 @@ class SelfDrivingPipeline:
             heading_error = self.controller.estimate_heading_error(waypoints, image_width, image_height)
             # Control: Calculate velocities
             is_stopped = (self.planner.state == State.STOP)
-            vel_left, vel_right = self.controller.heading_to_wheel_commands(heading_error, is_stopped)
+            if config.USE_TWIST:
+                v, omega = self.controller.heading_to_twist(heading_error, is_stopped)
+            else:
+                vel_left, vel_right = self.controller.heading_to_wheel_commands(heading_error, is_stopped)
 
+            if config.USE_TWIST:
             # Store computed velocities in case we transition to crossing decision
-            self.planner.crossing_vel_left = vel_left
-            self.planner.crossing_vel_right = vel_right
+                self.planner.crossing_vel = v
+                self.planner.crossing_omega = omega
+            else:
+                self.planner.crossing_vel_left = vel_left
+                self.planner.crossing_vel_right = vel_right
 
         # Handling Crossing Decision (from Behavior Planner FSM state: State.FOLLOW)
         if self.planner.crossing_decision:
@@ -112,13 +125,19 @@ class SelfDrivingPipeline:
                 self.planner.intersection_admitted = self.planner.can_intersect(image, red_lines)
 
             if self.planner.intersection_admitted:
-                vel_left = self.planner.crossing_vel_left
-                vel_right = self.planner.crossing_vel_right
+                if config.USE_TWIST:
+                    v = self.planner.crossing_vel
+                    omega = self.planner.crossing_omega
+                else:
+                    vel_left = self.planner.crossing_vel_left
+                    vel_right = self.planner.crossing_vel_right
                 waypoints = self.planner.decision_waypoint
             else:
                 self.planner.state_entered_at = time.time()
                 vel_left = 0.0
                 vel_right = 0.0
+                v = 0.0
+                omega = 0.0
                 waypoints = self.planner.decision_waypoint
 
         self.planner.time_last_waypoint = time.time()
@@ -145,10 +164,16 @@ class SelfDrivingPipeline:
 
         self.planner.blocked_state_last_time = time.time()
 
-        return (
-            vel_left, vel_right, visualization, edge_mask,
+        if config.USE_TWIST:
+            return (
+            v, omega, visualization, edge_mask,
             white_lane_mask, yellow_mask, red_mask, white_color
-        )
+            )
+        else:
+            return (
+                vel_left, vel_right, visualization, edge_mask,
+                white_lane_mask, yellow_mask, red_mask, white_color
+            )
 
 # Persistent singleton instance for ROS callback persistence
 _pipeline = SelfDrivingPipeline()

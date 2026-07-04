@@ -4,9 +4,10 @@ import numpy as np
 VIRTUAL = True
 ENHANCED_LANE_DETECTION = False
 OBJECT_DETECTION = False
+USE_TWIST = True
 
 def get_modes():
-    return VIRTUAL, ENHANCED_LANE_DETECTION, OBJECT_DETECTION
+    return VIRTUAL, ENHANCED_LANE_DETECTION, OBJECT_DETECTION, USE_TWIST
 
 # Hyperparameters dependent on VIRTUAL
 if VIRTUAL:
@@ -25,7 +26,18 @@ if VIRTUAL:
     STOP_TIME = 1
     FOLLOW_TIME = [4, 3, 2]  # left, top, right
     CROSS_TIME = 1.5
-    TURN_TIME = 1.8
+    TURN_TIME = 3.6
+    TURN_OMEGA = 1.5
+
+    #PID VALUES:
+    KP = 1.6
+    KI = 0.0
+    KD = 0.0
+    MAX_OMEGA = 3.0
+    INTEGRAL_LIMIT = 1.0       # anti-windup clamp on the PID's integral term — tune to taste
+    PID_MAX_DT = 0.5           # caps a single update's dt so a stale timestamp (after TURN/STOP) can't spike the integral
+    SLOW_DOWN_ON_TURN = True
+    TURN_SLOWDOWN_GAIN = 0.5   # v = BASE_SPEED * (1 - GAIN * |heading_error|); 0 disables, 1 = full stop at max error
 else:
     MIN_LANE_PIXELS = 100
     HIDE_TOP_OF_IMAGE = 200
