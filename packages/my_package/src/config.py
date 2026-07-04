@@ -5,7 +5,7 @@ VIRTUAL = False
 ENHANCED_LANE_DETECTION = True
 OBJECT_DETECTION = False
 USE_WHEEL_ODOMETRY = True
-USE_TWIST = True
+USE_TWIST = False
 
 
 def get_modes():
@@ -31,9 +31,7 @@ if VIRTUAL:
     FOLLOW_DISTANCE = [0.45, 0.35, 0.25]
     CROSS_TIME = 1.5
 
-    TURN_SPEED_LEFT_WHEEL = 0.0
     TURN_SPEED_RIGHT_WHEEL = 0.4
-    TURN_TIME = 1.8
     TURN_DISTANCE = 0.07
     TURN_TIME = 3.6
     TURN_OMEGA = 1.5
@@ -65,10 +63,20 @@ else:
     FOLLOW_DISTANCE = [0.45, 0.35, 0.25]
     CROSS_TIME = 1.5
 
-    TURN_SPEED_LEFT_WHEEL = 0.0
     TURN_SPEED_RIGHT_WHEEL = 0.7
-    TURN_TIME = 0.8
     TURN_DISTANCE = 0.07
+    TURN_TIME = 2.0
+    TURN_OMEGA = 3.0
+
+    # PID VALUES:
+    KP = 3.0
+    KI = 0.0
+    KD = 0.0
+    MAX_OMEGA = 3.0
+    INTEGRAL_LIMIT = 1.0  # anti-windup clamp on the PID's integral term — tune to taste
+    PID_MAX_DT = 0.5  # caps a single update's dt so a stale timestamp (after TURN/STOP) can't spike the integral
+    SLOW_DOWN_ON_TURN = False
+    TURN_SLOWDOWN_GAIN = 0.5  # v = BASE_SPEED * (1 - GAIN * |heading_error|); 0 disables, 1 = full stop at max error
 
 CROSSING_OFFSET_TOP = np.array([110, 0])
 

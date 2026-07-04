@@ -213,6 +213,8 @@ class SelfDrivingPipeline:
         if self.planner.state == State.BLOCKED:
             vel_left = 0.0
             vel_right = 0.0
+            v = 0
+            omega = 0
 
         # Visualization
         visualization = self.visualizer.visualize(

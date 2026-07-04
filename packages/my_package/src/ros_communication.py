@@ -13,7 +13,7 @@ from image_utils import load_calibrations, unwarp_image
 PUBLISH_TO_WHEELS = True
 
 # Turn this off, it needs lot of resources
-PUBLISH_MAIN_VISUALIZATION = False
+PUBLISH_MAIN_VISUALIZATION = True
 PUBLISH_ALL_VISUALIZATIONS = False
 
 VIRTUAL, ENHANCED_LANE_DETECTION, OBJECT_DETECTION, USE_TWIST = get_modes()
