@@ -36,6 +36,11 @@ class BehaviorPlanner:
         self.crossing_vel_left = 0.0
         self.crossing_vel_right = 0.0
 
+        self.left_ticks_before_relevant_state = 0
+        self.right_ticks_before_relevant_state = 0
+        self.left_ticks = 0
+        self.right_ticks = 0
+
     def change_state(self, new_state: State):
         self.state = new_state
         self.state_entered_at = time.time()
@@ -50,6 +55,16 @@ class BehaviorPlanner:
     def no_waypoint_passed(self, duration: float) -> bool:
         return time.time() - self.time_last_waypoint >= duration
 
+    def distance_passed(self, distance: float):
+        delta_ticks_left = self.left_ticks - self.left_ticks_before_relevant_state
+        delta_ticks_right = self.right_ticks - self.right_ticks_before_relevant_state
+        rotation_wheel_left = delta_ticks_left * config.ALPHA_WHEEL  # calculate total rotation of left wheel 
+        rotation_wheel_right = delta_ticks_right * config.ALPHA_WHEEL # calculate total rotation of right wheel 
+        d_left = config.WHEEL_RADIUS * rotation_wheel_left
+        d_right = config.WHEEL_RADIUS * rotation_wheel_right
+        d_A = (d_left + d_right) / 2
+        return d_A >= distance
+
     def update_state(self, red_mask: np.ndarray):
         """Update FSM transitions based on perception input (red stop line mask)."""
         if self.state == State.DRIVE:
@@ -61,16 +76,26 @@ class BehaviorPlanner:
             if self.time_passed(config.STOP_TIME):
                 self.change_state(State.FOLLOW)
         if self.state == State.FOLLOW:
-            follow_map = {"left": config.FOLLOW_TIME[0], "straight": config.FOLLOW_TIME[1]}
-            t = follow_map.get(self.decision, config.FOLLOW_TIME[2])
-            if self.time_passed(t):
-                self.change_state(State.CROSS)
+            follow_distance_map = {"left": config.FOLLOW_DISTANCE[0], "straight": config.FOLLOW_DISTANCE[1]}
+            d = follow_distance_map.get(self.decision, config.FOLLOW_DISTANCE[2])
+            follow_time_map = {"left": config.FOLLOW_TIME[0], "straight": config.FOLLOW_TIME[1]}
+            t = follow_time_map.get(self.decision, config.FOLLOW_TIME[2])
+            if config.USE_WHEEL_ODOMETRY:
+                if self.distance_passed(d):
+                    self.change_state(State.CROSS)
+            else:
+                if self.time_passed(t):
+                    self.change_state(State.CROSS)
         if self.state == State.CROSS:
             if self.time_passed(config.CROSS_TIME):
                 self.change_state(State.DRIVE)
         if self.state == State.TURN:
-            if self.time_passed(config.TURN_TIME):
-                self.change_state(State.DRIVE)
+            if config.USE_WHEEL_ODOMETRY:
+                if self.distance_passed(config.TURN_DISTANCE):
+                    self.change_state(State.DRIVE)
+            else:
+                if self.time_passed(config.TURN_TIME):
+                    self.change_state(State.DRIVE)
 
     def handle_blocking(self, is_blocked: bool):
         """Handle blocking/obstacle state transitions."""
@@ -240,3 +265,11 @@ class BehaviorPlanner:
                 waypoints = None
 
         return waypoints
+
+    def set_ticks(self, ticks_left, ticks_right):
+        if self.state == State.FOLLOW or self.state == State.TURN:
+            self.left_ticks = ticks_left
+            self.right_ticks = ticks_right
+        else:
+            self.left_ticks_before_relevant_state = ticks_left
+            self.right_ticks_before_relevant_state = ticks_right

@@ -7,6 +7,8 @@ import numpy as np
 VIRTUAL = True
 ENHANCED_LANE_DETECTION = True
 OBJECT_DETECTION = True
+USE_WHEEL_ODOMETRY = True
+USE_TWIST = True
 
 HZ = 5 if VIRTUAL else 15
 
@@ -81,8 +83,25 @@ if VIRTUAL:
 
     STOP_TIME = 1
     FOLLOW_TIME = [4, 3, 2]  # left, top, right
+    FOLLOW_DISTANCE = [0.45, 0.35, 0.25]
     CROSS_TIME = 1.5
+
+    TURN_SPEED_LEFT_WHEEL = 0.0
+    TURN_SPEED_RIGHT_WHEEL = 0.4
     TURN_TIME = 1.8
+    TURN_DISTANCE = 0.07
+    TURN_TIME = 3.6
+    TURN_OMEGA = 1.5
+
+    # PID VALUES:
+    KP = 1.6
+    KI = 0.0
+    KD = 0.0
+    MAX_OMEGA = 3.0
+    INTEGRAL_LIMIT = 1.0  # anti-windup clamp on the PID's integral term — tune to taste
+    PID_MAX_DT = 0.5  # caps a single update's dt so a stale timestamp (after TURN/STOP) can't spike the integral
+    SLOW_DOWN_ON_TURN = True
+    TURN_SLOWDOWN_GAIN = 0.5  # v = BASE_SPEED * (1 - GAIN * |heading_error|); 0 disables, 1 = full stop at max error
 else:
     MIN_LANE_PIXELS = 100
     HIDE_TOP_OF_IMAGE = 200
@@ -97,9 +116,16 @@ else:
     YELLOW_HSV_UPPER = np.array([40, 255, 255])
 
     STOP_TIME = 2
-    FOLLOW_TIME = [4, 4, 3]  # left, top, right
-    CROSS_TIME = 2
-    TURN_TIME = 3
+    FOLLOW_TIME = [1, 1.7, 1.2]  # left, top, right
+    FOLLOW_DISTANCE = [0.45, 0.35, 0.25]
+    CROSS_TIME = 1.5
+
+    TURN_SPEED_LEFT_WHEEL = 0.0
+    TURN_SPEED_RIGHT_WHEEL = 0.7
+    TURN_TIME = 0.8
+    TURN_DISTANCE = 0.07
+
+CROSSING_OFFSET_TOP = np.array([110, 0])
 
 if VIRTUAL and not ENHANCED_LANE_DETECTION:
     BASE_SPEED = 0.25
@@ -115,18 +141,17 @@ elif not VIRTUAL and not ENHANCED_LANE_DETECTION:
     IMAGE_WIDTH_OFFSET_FACTOR_YELLOW = 0.15
     IMAGE_WIDTH_OFFSET_FACTOR_WHITE = 0.25
 else:
-    BASE_SPEED = 0.2
-    STEERING_GAIN = 0.25
-    CROSSING_OFFSET_LEFT = np.array([40, -100])
-    CROSSING_OFFSET_RIGHT = np.array([80, 100])
-
-CROSSING_OFFSET_TOP = np.array([110, 0])
+    BASE_SPEED = 0.3
+    STEERING_GAIN = 0.3
+    CROSSING_OFFSET_LEFT = np.array([40, -230])
+    CROSSING_OFFSET_RIGHT = np.array([80, 150])
+    CROSSING_OFFSET_TOP = np.array([100, 0])
 
 # Global parameters
 MAX_SPEED_DIFF = 0.2
 WHITE_LANE_ONLY_BIGGEST_COMPONENT = True
 N_WAYPOINTS = 6
-SINGLE_LANE_SCALE_FACTOR_WHITE = 0.65
+SINGLE_LANE_SCALE_FACTOR_WHITE = 0.9
 SINGLE_LANE_SCALE_FACTOR_YELLOW = 0.6
 STOP_MARKER_Y = 350
 X_TOLERANCE = 5
@@ -135,8 +160,11 @@ ANGLE_THRESHOLD = 5
 CUT_FRONT_STOP_LINE = 400
 LEFT_VS_RIGHT = 320
 WAIT_UNTIL_TURN_TIME = 3
-TURN_SPEED_RIGHT_WHEEL = 0.4
 PROXIMITY_OTHER_VEHICLES_TO_RED_LINE = 50
+
+# Odometry
+WHEEL_RADIUS = 0.0318
+ALPHA_WHEEL = 2 * np.pi / 135
 
 # Color filtering limits
 SIGMA = 2.0

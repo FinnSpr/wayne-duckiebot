@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Modular lane-following pipeline wrapper for Duckiebot.
 Acts as backward-compatible entry point.
@@ -65,6 +64,8 @@ class SelfDrivingPipeline:
     def process(
         self,
         image: np.ndarray,
+        left_encoder: int,
+        right_encoder: int,
     ) -> tuple[float, float, dict[str, np.ndarray], dict[str, np.ndarray]]:
         # Unwarp (undistort) the image
         unwarped_image = image_utils.unwarp_image(image, self._K, self._D, self._P)
@@ -101,6 +102,7 @@ class SelfDrivingPipeline:
             yellow_mask[: config.HIDE_TOP_OF_IMAGE, :] = 0
             red_mask[: config.HIDE_TOP_OF_IMAGE, :] = 0
 
+        self.planner.set_ticks(left_encoder, right_encoder)
         # Update FSM transitions
         self.planner.update_state(red_mask)
 
@@ -193,13 +195,20 @@ class SelfDrivingPipeline:
             )
             # Control: Calculate velocities
             is_stopped = self.planner.state == State.STOP
-            vel_left, vel_right = self.controller.heading_to_wheel_commands(
-                heading_error, is_stopped
-            )
+            if config.USE_TWIST:
+                v, omega = self.controller.heading_to_twist(heading_error, is_stopped)
+            else:
+                vel_left, vel_right = self.controller.heading_to_wheel_commands(
+                    heading_error, is_stopped
+                )
 
-            # Store computed velocities in case we transition to crossing decision
-            self.planner.crossing_vel_left = vel_left
-            self.planner.crossing_vel_right = vel_right
+            if config.USE_TWIST:
+                # Store computed velocities in case we transition to crossing decision
+                self.planner.crossing_vel = v
+                self.planner.crossing_omega = omega
+            else:
+                self.planner.crossing_vel_left = vel_left
+                self.planner.crossing_vel_right = vel_right
 
         # Handling Crossing Decision (from Behavior Planner FSM state: State.FOLLOW)
         if self.planner.crossing_decision:
@@ -210,13 +219,19 @@ class SelfDrivingPipeline:
                 )
 
             if self.planner.intersection_admitted:
-                vel_left = self.planner.crossing_vel_left
-                vel_right = self.planner.crossing_vel_right
+                if config.USE_TWIST:
+                    v = self.planner.crossing_vel
+                    omega = self.planner.crossing_omega
+                else:
+                    vel_left = self.planner.crossing_vel_left
+                    vel_right = self.planner.crossing_vel_right
                 waypoints = self.planner.decision_waypoint
             else:
                 self.planner.state_entered_at = time.time()
                 vel_left = 0.0
                 vel_right = 0.0
+                v = 0.0
+                omega = 0.0
                 waypoints = self.planner.decision_waypoint
 
         self.planner.time_last_waypoint = time.time()
@@ -245,9 +260,17 @@ class SelfDrivingPipeline:
         color_vis, bw_vis = self._build_vis_dicts(
             locals()
         )  # TODO: maybe fix this locals() hack, variables look like they are unused
-        return (
-            vel_left,
-            vel_right,
-            color_vis,
-            bw_vis,
-        )
+        if config.USE_TWIST:
+            return (
+                v,
+                omega,
+                color_vis,
+                bw_vis,
+            )
+        else:
+            return (
+                vel_left,
+                vel_right,
+                color_vis,
+                bw_vis,
+            )
