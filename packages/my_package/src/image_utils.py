@@ -13,6 +13,21 @@ import numpy as np
 from typing import Tuple
 
 
+def load_img_from_msg(msg) -> np.ndarray:
+    """
+    Convert a ROS CompressedImage message to a BGR image.
+
+    Args:
+        msg: sensor_msgs.msg.CompressedImage message
+
+    Returns:
+        image: BGR image (H x W x 3)
+    """
+    np_arr = np.frombuffer(msg.data, np.uint8)
+    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    return image
+
+
 def load_calibrations(camera_info_msg) -> Tuple[np.ndarray, np.ndarray]:
     """
     Extract camera intrinsic calibration from a ROS CameraInfo message.
