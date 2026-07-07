@@ -21,6 +21,21 @@ for developing ROS-based software in Duckietown.
 **NOTE:** If you want to develop software that does not use
 ROS, check out [this template](https://github.com/duckietown/template-basic).
 
+## Running on the DuckieTown PC provided by the Lab
+
+Since the lab provided desktop uses a newer kernel, a straightforward devel run fails checking for cpuset.
+We create a mock script to respond to the request and let it continue.
+Further, to use nvidia GPU, we had to pass the gpu runtime as well:
+```
+dts devel run -R waynevbot -- -v /tmp/dt-get-container-id:/usr/local/bin/dt-get-container-id --runtime nvidia --gpus all
+```
+
+Contents of the `/tmp/dt-get-container-id` file are as follows:
+```
+#!/usr/bin/env python3
+import socket
+print(socket.gethostname())
+```
 
 ## How to use it
 

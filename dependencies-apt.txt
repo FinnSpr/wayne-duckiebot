@@ -1,1 +1,7 @@
-# LIST YOUR APT PACKAGES HERE
+cuda-cudart-12-4
+libcublas-12-4
+libcusparse-12-4
+libcurand-12-4
+libcufft-12-4
+libcusolver-12-4
+cudnn9-cuda-12

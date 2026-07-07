@@ -50,9 +50,22 @@ ENV DT_MODULE_TYPE="${REPO_NAME}" \
     DT_LAUNCH_PATH="${LAUNCH_PATH}" \
     DT_LAUNCHER="${LAUNCHER}"
 
+ARG OS_VERSION="2204"
+
+RUN wget "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb"
+RUN dpkg -i cuda-keyring_1.1-1_all.deb
+RUN wget https://developer.download.nvidia.com/compute/cudnn/9.6.0/local_installers/cudnn-local-repo-ubuntu2204-9.6.0_1.0-1_amd64.deb && \
+    dpkg -i cudnn-local-repo-ubuntu2204-9.6.0_1.0-1_amd64.deb && \
+    cp /var/cudnn-local-repo-ubuntu2204-9.6.0/cudnn-*-keyring.gpg /usr/share/keyrings/
+RUN apt update
+
 # install apt dependencies
 COPY ./dependencies-apt.txt "${REPO_PATH}/"
 RUN dt-apt-install ${REPO_PATH}/dependencies-apt.txt
+
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH=${CUDA_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
 
 # install python3 dependencies
 ARG PIP_INDEX_URL="https://pypi.org/simple"
@@ -73,7 +86,8 @@ COPY ./launchers/. "${LAUNCH_PATH}/"
 RUN dt-install-launchers "${LAUNCH_PATH}"
 
 # define default command
-CMD ["bash", "-c", "dt-launcher-${DT_LAUNCHER}"]
+CMD ["bash", "-c", "export CUDA_HOME=/usr/local/cuda && export PATH=${CUDA_HOME}/bin:${PATH} && export LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH} && dt-launcher-${DT_LAUNCHER}"]
+
 
 # store module metadata
 LABEL org.duckietown.label.module.type="${REPO_NAME}" \
