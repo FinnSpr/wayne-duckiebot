@@ -1,3 +1,5 @@
+from typing import Optional, Tuple, Union  # noqa: UP035
+
 import config
 import cv2
 import image_utils
@@ -11,28 +13,24 @@ import numpy as np
 
 def cem_planner(
     cost_function: callable,
-    start_pos: tuple[float, float] = (0, 0),
+    start_pos: Tuple[float, float] = (0, 0),
     start_angle: float = 0.0,
-    horizon: int = 10,
+    horizon: int = 5,
     num_samples: int = 200,
     num_elites: int = 20,
     num_iterations: int = 3,
-    dt: float = 0.1,
-    v_mean: float | np.ndarray = 0.2,
-    v_std: float | np.ndarray = 0.1,
-    omega_mean: float | np.ndarray = 0.0,
-    omega_std: float | np.ndarray = 1.0,
+    dt: float = 1.0,
+    v_const: float = 0.1,
+    omega_mean: Union[float, np.ndarray] = 0.0,
+    omega_std: Union[float, np.ndarray] = 1.0,
     temperature: float = 0.1,
-    v_clip: tuple[float, float] = (0.0, 1.0),
-    omega_clip: tuple[float, float] = (-np.pi, np.pi),
-) -> tuple[np.ndarray, np.ndarray]:
+    omega_clip: Tuple[float, float] = (-np.pi, np.pi),
+    interp_steps: int = 3,
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Cross-entropy method planner with MPPI-style elite weighting.
 
-    Samples action sequences (v, omega) from independent Gaussians, rolls
-    them out with a differential-drive model, evaluates trajectory costs,
-    selects elites and refits the Gaussian means/variances using
-    softmax-weighted statistics of the elites.
+    Fixed speed, plans only omega.
 
     Args:
         cost_function: f(points) -> (M,) costs, where points is (M, 2).
@@ -43,23 +41,23 @@ def cem_planner(
         num_elites: Number of elites kept per iteration.
         num_iterations: Number of CEM iterations.
         dt: Time step duration (seconds).
-        v_mean: Initial mean forward speed. Scalar or (horizon,).
-        v_std: Initial std of forward speed. Scalar or (horizon,).
+        v_const: Fixed forward speed to use (not sampled).
         omega_mean: Initial mean angular velocity. Scalar or (horizon,).
         omega_std: Initial std of angular velocity. Scalar or (horizon,).
         temperature: MPPI temperature for softmax weighting.
-        v_clip: (min, max) bounds for forward speed.
         omega_clip: (min, max) bounds for angular velocity.
+        interp_steps: Number of intermediate points to insert between
+            consecutive trajectory waypoints for finer cost evaluation
+            (0 = no interpolation).
 
     Returns:
         (trajectory_positions, trajectory_actions) where
         positions is (horizon, 2) and actions is (horizon, 2) [v, omega].
     """
     start_pos = np.asarray(start_pos, dtype=np.float64)
+    v_unrolled = np.full((num_samples, horizon), v_const, dtype=np.float64)
 
     # Broadcast initial distribution parameters to (horizon,).
-    v_mean = np.broadcast_to(np.asarray(v_mean, dtype=np.float64), (horizon,)).copy()
-    v_std = np.broadcast_to(np.asarray(v_std, dtype=np.float64), (horizon,)).copy()
     omega_mean = np.broadcast_to(
         np.asarray(omega_mean, dtype=np.float64), (horizon,)
     ).copy()
@@ -72,40 +70,38 @@ def cem_planner(
     best_positions = None
 
     for _ in range(num_iterations):
-        # Sample action sequences and clip to bounds.
-        v_samples = np.clip(
-            np.random.normal(v_mean, v_std, size=(num_samples, horizon)),
-            v_clip[0],
-            v_clip[1],
-        )
         omega_samples = np.clip(
             np.random.normal(omega_mean, omega_std, size=(num_samples, horizon)),
             omega_clip[0],
             omega_clip[1],
         )
 
-        # Roll out all trajectories.
+        # Roll out
         start_positions = np.tile(start_pos, (num_samples, 1))  # (N, 2)
         start_angles = np.full(num_samples, start_angle)  # (N,)
         traj = kinematics.diff_drive_trajectory(
-            start_positions, start_angles, v_samples, omega_samples, dt
+            start_positions, start_angles, v_unrolled, omega_samples, dt
         )  # (N, horizon, 3)
         positions = traj[..., :2]  # (N, horizon, 2)
 
-        # Evaluate costs.
-        costs = get_trajectories_score(positions, cost_function)
+        # Evaluate on intermediate points as well
+        if interp_steps > 0:
+            interpolated_positions = _add_interpolation_points(
+                positions, start_pos, interp_steps
+            )
+        costs = get_trajectories_score(interpolated_positions, cost_function)
 
-        # Track best overall.
         idx_min = np.argmin(costs)
         if costs[idx_min] < best_cost:
             best_cost = costs[idx_min]
-            best_actions = np.column_stack([v_samples[idx_min], omega_samples[idx_min]])
+            best_actions = np.column_stack(
+                [v_unrolled[idx_min], omega_samples[idx_min]]
+            )
             best_positions = positions[idx_min]
 
-        # Select elites.
+        # Elites
         elite_idx = np.argpartition(costs, num_elites)[:num_elites]
         elite_costs = costs[elite_idx]
-        elite_v = v_samples[elite_idx]  # (K, horizon)
         elite_omega = omega_samples[elite_idx]
 
         # MPPI-style weights within elites.
@@ -113,18 +109,10 @@ def cem_planner(
         w = np.exp(-(elite_costs - c_min) / temperature)
         w /= w.sum()
 
-        # Refit means (weighted) and clip to bounds.
-        v_mean = np.clip((w[:, None] * elite_v).sum(axis=0), v_clip[0], v_clip[1])
         omega_mean = np.clip(
             (w[:, None] * elite_omega).sum(axis=0), omega_clip[0], omega_clip[1]
         )
-
-        # Refit std (weighted).
-        v_std = np.sqrt((w[:, None] * (elite_v - v_mean) ** 2).sum(axis=0))
         omega_std = np.sqrt((w[:, None] * (elite_omega - omega_mean) ** 2).sum(axis=0))
-
-        # Prevent std collapse.
-        v_std = np.maximum(v_std, 1e-4)
         omega_std = np.maximum(omega_std, 1e-4)
 
     return best_positions, best_actions
@@ -159,8 +147,8 @@ def get_trajectories_score(
 
 
 def get_planning_cost_function(
-    left_lane_mask: np.ndarray | None,
-    right_lane_mask: np.ndarray | None,
+    left_lane_mask: Optional[np.ndarray],
+    right_lane_mask: Optional[np.ndarray],
     obstacle_bottom_image_coords: np.ndarray,
     goal_position_image_coords: np.ndarray,
     H_image_to_metric: np.ndarray,
@@ -384,7 +372,7 @@ def _polygon_distance(
 
 
 def _mask_to_world_polyline(
-    mask: np.ndarray | None,
+    mask: Optional[np.ndarray],
     H_image_to_metric: np.ndarray,
     epsilon: float = 2.0,
 ) -> np.ndarray:
@@ -440,3 +428,44 @@ def _mask_to_polyline(mask: np.ndarray, epsilon: float = 2.0) -> np.ndarray:
     contour = points.astype(np.int32).reshape(-1, 1, 2)
     approx = cv2.approxPolyDP(contour, epsilon, closed=False)
     return approx[:, 0, :].astype(np.float64)
+
+
+def _add_interpolation_points(
+    trajectories: np.ndarray,
+    start_pos: np.ndarray,
+    interp_steps: int,
+) -> np.ndarray:
+    """
+    Insert linearly interpolated waypoints between consecutive positions.
+
+    For each trajecotory, prepends start_pos, then inserts interp_steps
+    evenly spaced intermediate points between each pair of consecutive
+    waypoints (including between start_pos and the first waypoint).
+
+    Args:
+        trajectories: (N, H, 2) batch of trajectory waypoints.
+        start_pos: (2,) starting position shared by all trajectories.
+        interp_steps: Number of intermediate points per segment.
+
+    Returns:
+        (N, H + (H+1)*interp_steps, 2) interpolated trajectories.
+    """
+    if interp_steps == 0:
+        return trajectories
+
+    N, H, _ = trajectories.shape
+    start = np.broadcast_to(start_pos, (N, 1, 2))
+    # Prepend start_pos
+    padded = np.concatenate([start, trajectories], axis=1)
+    segment_points = interp_steps + 2
+    alphas = np.linspace(0.0, 1.0, segment_points, dtype=np.float64)
+    seg_start = padded[:, :H, np.newaxis, :]  # (N, H, 1, 2)
+    seg_end = padded[:, 1:, np.newaxis, :]  # (N, H, 1, 2)
+    a = alphas[np.newaxis, np.newaxis, :, np.newaxis]  # (1, 1, total, 1)
+    interp = seg_start * (1 - a) + seg_end * a  # (N, H, total, 2)
+
+    # Last point overlaps
+    interp_no_overlap = interp[..., :-1, :]  # (N, H, total-1, 2)
+    result = interp_no_overlap.reshape(N, H * (segment_points - 1), 2)
+    last = trajectories[:, -1:, :]  # (N, 1, 2)
+    return np.concatenate([result, last], axis=1)

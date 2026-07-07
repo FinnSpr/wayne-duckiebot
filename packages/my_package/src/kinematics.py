@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Tuple, Union
 
 
 def diff_drive_step(
@@ -6,8 +7,8 @@ def diff_drive_step(
     angle: np.ndarray,
     v: np.ndarray,
     omega: np.ndarray,
-    dt: float | np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+    dt: Union[float, np.ndarray],
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Simulate one step of a differential-drive robot with constant commands.
 
@@ -51,7 +52,7 @@ def diff_drive_trajectory(
     start_angle: np.ndarray,
     v: np.ndarray,
     omega: np.ndarray,
-    dt: float | np.ndarray = 0.1,
+    dt: Union[float, np.ndarray] = 0.1,
 ) -> np.ndarray:
     """
     Simulate differential-drive trajectories for a batch of robots.

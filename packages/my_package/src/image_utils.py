@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Tuple
 
 import cv2
 import numpy as np
@@ -27,7 +28,7 @@ class BEVConfig:
         y_m = (bev_h_px - v)   * bev_resolution   (+ = ahead,  v=0 = farthest row)
     """
 
-    bev_size: tuple[float, float]  # (width_m, height_m)
+    bev_size: Tuple[float, float]  # (width_m, height_m)
     bev_resolution: float  # meters per pixel
 
     @property
@@ -39,17 +40,17 @@ class BEVConfig:
         return int(self.bev_size[1] / self.bev_resolution)
 
     @property
-    def bev_shape(self) -> tuple[int, int]:
+    def bev_shape(self) -> Tuple[int, int]:
         """(height_px, width_px) — numpy convention."""
         return (self.bev_h_px, self.bev_w_px)
 
-    def pixel_to_metric(self, u: float, v: float) -> tuple[float, float]:
+    def pixel_to_metric(self, u: float, v: float) -> Tuple[float, float]:
         """BEV pixel (u, v) → ground plane (x_forward, y_right)."""
         x_m = (self.bev_h_px - v) * self.bev_resolution  # forward
         y_m = -(u - self.bev_w_px / 2) * self.bev_resolution  # left (positive = left)
         return x_m, y_m
 
-    def metric_to_pixel(self, x_m: float, y_m: float) -> tuple[float, float]:
+    def metric_to_pixel(self, x_m: float, y_m: float) -> Tuple[float, float]:
         """Ground plane (x_forward, y_right) → BEV pixel (u, v)."""
         u = -y_m / self.bev_resolution + self.bev_w_px / 2
         v = self.bev_h_px - x_m / self.bev_resolution
@@ -59,7 +60,7 @@ class BEVConfig:
 def load_calibrations(
     intrinsic_path: str,
     extrinsic_path: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Load camera intrinsic and extrinsic calibration from YAML files.
 
@@ -173,7 +174,7 @@ def mask_to_positions(mask: np.ndarray) -> np.ndarray:
     return np.argwhere(mask)
 
 
-def positions_to_mask(positions: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+def positions_to_mask(positions: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:
     """
     Reconstruct a binary mask from a set of (row, col) positions.
 
