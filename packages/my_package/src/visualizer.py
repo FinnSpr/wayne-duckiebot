@@ -7,7 +7,7 @@ import numpy as np
 def draw_trajectory(
     image: np.ndarray,
     trajectory: np.ndarray,
-    color: tuple[int, int, int] = (0, 0, 0),
+    color: Tuple[int, int, int] = (0, 0, 0),
     radius: int = 3,
     thickness: int = 2,
 ) -> np.ndarray:

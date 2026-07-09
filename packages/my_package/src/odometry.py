@@ -10,8 +10,6 @@ def delta_phi(ticks: int, prev_ticks: int, resolution: int) -> float:
     Return:
         dphi: Rotation of the wheel in radians.
     """
-
-    # TODO: these are random values, you have to implement your own solution in here
     delta_ticks = ticks - prev_ticks
     alpha = 2 * np.pi / resolution
     dphi = delta_ticks * alpha

@@ -2,6 +2,7 @@
 import os
 
 import config
+import cv2
 import numpy as np
 import rospy
 from cv_bridge import CvBridge
@@ -9,7 +10,7 @@ from duckietown.dtros import DTROS, NodeType
 from duckietown_msgs.msg import Twist2DStamped, WheelEncoderStamped, WheelsCmdStamped
 from image_utils import BEVConfig, load_calibrations
 from process import SelfDrivingPipeline
-from sensor_msgs.msg import CameraInfo, CompressedImage, Image
+from sensor_msgs.msg import CompressedImage, Image
 
 
 class ROSCommunication(DTROS):
@@ -31,7 +32,10 @@ class ROSCommunication(DTROS):
         )
 
         # Self-driving pipeline
-        self._pipeline = SelfDrivingPipeline(self._K, self._D, self._P, self._H)
+        self._pipeline = SelfDrivingPipeline(
+            self._K, self._D, self._P, self._H, self.bev_cfg
+        )
+        self._pipeline.planner.set_intersection_decisions(config.INTERSECTION_DECISIONS)
 
         # Latest messages from each topic, initialized to None
         self._image = None
@@ -40,12 +44,6 @@ class ROSCommunication(DTROS):
         self._right_encoder = None
 
         # Subscribers
-        self.sub_camera_info = rospy.Subscriber(
-            f"/{self._vehicle_name}/camera_node/camera_info",
-            CameraInfo,
-            self.cb_camera_info,
-        )
-
         rospy.Subscriber(
             f"/{self._vehicle_name}/camera_node/image/compressed",
             CompressedImage,
@@ -77,7 +75,6 @@ class ROSCommunication(DTROS):
                 )
 
     # --- Callbacks ---
-
     def cb_camera(self, msg):
         now = rospy.Time.now()
         if (now - self._last_process_time) < self._process_interval:
@@ -102,7 +99,9 @@ class ROSCommunication(DTROS):
         pub.publish(self._bridge.cv2_to_imgmsg(vis_img, encoding=encoding))
 
     def process(self):
-        vel_left, vel_right, color_vis, bw_vis = self._pipeline.process(self._image)
+        vel_left, vel_right, color_vis, bw_vis = self._pipeline.process(
+            self._image, self._left_encoder, self._right_encoder
+        )
         if config.PUBLISH_VISUALIZATIONS:
             for vis_name, vis_img in color_vis.items():
                 self._publish_vis(vis_name, vis_img, "bgr8")

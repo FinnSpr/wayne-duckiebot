@@ -169,6 +169,7 @@ class PerceptionModule:
             self.left_white_lane = None
             self.edge_mask = None
             self.white_color = self.right_white_lane
+        self._apply_lane_roi()
 
         # Object detection
         if self.use_object_detection:
@@ -191,6 +192,13 @@ class PerceptionModule:
         else:
             self.white_spline = None
             self.yellow_spline = None
+
+    def _apply_lane_roi(self) -> None:
+        roi = config.HIDE_TOP_OF_IMAGE
+        for attr in ("left_white_lane", "right_white_lane", "yellow_mask", "red_mask"):
+            mask = getattr(self, attr, None)
+            if mask is not None:
+                mask[:roi, :] = 0
 
     def _ensure_min_pixels(self, mask: np.ndarray) -> np.ndarray:
         """Ensure that the mask has at least min_pixels non-zero pixels."""

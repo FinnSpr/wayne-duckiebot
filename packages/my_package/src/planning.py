@@ -1,13 +1,12 @@
-import random
 import time
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, List, Optional, Tuple
-
-import cv2
-import numpy as np
+from typing import Callable, Optional
 
 import config
+import cv2
+import numpy as np
 
 
 class State(Enum):
@@ -25,7 +24,6 @@ class Transition:
     from_state: State
     to_state: State
     condition: Callable[[], bool]
-    action: Optional[Callable[[], None]] = None
 
 
 class BehaviorPlanner:
@@ -44,13 +42,15 @@ class BehaviorPlanner:
         self.remained_in_blocked_state = 0.0
 
         # Perception inputs (set by pipeline each frame before update_state)
-        self.red_area = 0
+        self.stop_line_area = 0
         self.is_blocked = False
         self.duckie_nearby = False
 
+        self._intersection_decisions = deque()
         self.decision_waypoint = None
         self.decision = None
         self.intersection_admitted = False
+        self.intersection_speed = None
 
         self.left_ticks_before_relevant_state = 0
         self.right_ticks_before_relevant_state = 0
@@ -68,9 +68,13 @@ class BehaviorPlanner:
             # Transition(State.DUCKIE_AVOID, State.DRIVE, condition=self._duckie_clear),
         ]
 
+    def set_intersection_decisions(self, decisions: list) -> None:
+        self._intersection_decisions = deque(decisions)
+
     def update_state(self):
         """Evaluate FSM transitions — call once per frame after feeding perception inputs."""
-        # ── BLOCKED (special: from any state, remembers prev_state) ──
+        # TODO: What to do with blocked state?
+        # Currently I only put is_blocked = 0
         if self.is_blocked and self.state != State.BLOCKED:
             self.prev_state = self.state
             self.change_state(State.BLOCKED)
@@ -86,15 +90,14 @@ class BehaviorPlanner:
                 print(self.state)
             return
 
-        # ── Normal transitions ──
+        # Transitions
         for t in self._transitions:
             if t.from_state is self.state and t.condition():
                 self.change_state(t.to_state)
-                if t.action:
-                    t.action()
                 break
 
     def change_state(self, new_state: State):
+        self.prev_state = self.state
         self.state = new_state
         self.state_entered_at = time.time()
         self.intersection_admitted = False
@@ -102,8 +105,6 @@ class BehaviorPlanner:
         if new_state == State.FOLLOW:
             self.decision_waypoint = None  # force fresh intersection choice
             self.decision = None
-        if new_state == State.DUCKIE_AVOID:
-            self._duckie_last_seen_at = time.time()
         print(self.state)
 
     def time_passed(self, duration: float) -> bool:
@@ -132,7 +133,7 @@ class BehaviorPlanner:
     # Transition conditions
 
     def _should_stop(self) -> bool:
-        return self.red_area >= config.MIN_AREA
+        return self.stop_line_area >= config.MIN_AREA
 
     def _should_turn(self) -> bool:
         return self.no_waypoint_passed(config.WAIT_UNTIL_TURN_TIME)
@@ -141,16 +142,8 @@ class BehaviorPlanner:
         return self.time_passed(config.STOP_TIME)
 
     def _follow_finished(self) -> bool:
-        follow_distance_map = {
-            "left": config.FOLLOW_DISTANCE[0],
-            "straight": config.FOLLOW_DISTANCE[1],
-        }
-        d = follow_distance_map.get(self.decision, config.FOLLOW_DISTANCE[2])
-        follow_time_map = {
-            "left": config.FOLLOW_TIME[0],
-            "straight": config.FOLLOW_TIME[1],
-        }
-        t = follow_time_map.get(self.decision, config.FOLLOW_TIME[2])
+        d = config.FOLLOW_DISTANCE[self.decision]
+        t = config.FOLLOW_TIME[self.decision]
         if config.USE_WHEEL_ODOMETRY:
             return self.distance_passed(d)
         return self.time_passed(t)
@@ -175,69 +168,22 @@ class BehaviorPlanner:
             config, "DUCKIE_AVOID_CLEAR_TIME", 2.0
         )
 
-    def get_intersection_waypoint(
-        self, red_lines: List[Tuple], image_width: int, image_height: int
-    ) -> Optional[np.ndarray]:
-        """Pick an intersection destination and return its waypoint.
+    def get_intersection_waypoint(self) -> Optional[np.ndarray]:
+        """Get the waypoint for the current intersection decision."""
+        if self.decision_waypoint is not None:
+            return self.decision_waypoint
 
-        Called once when entering FOLLOW state. Analyses red stop lines to
-        determine possible paths (straight / left / right), picks one at
-        random, and returns the target waypoint in image coordinates.
-        """
-        other_lines = [l for l in red_lines if l[1] < config.CUT_FRONT_STOP_LINE]
-        if not other_lines:
+        if not self._intersection_decisions:
+            print("No more intersection decisions available.")
             return None
 
-        v_left = [
-            l for l in other_lines if l[2] == "vertical" and l[0] < config.LEFT_VS_RIGHT
-        ]
-        v_right = [
-            l
-            for l in other_lines
-            if l[2] == "vertical" and l[0] >= config.LEFT_VS_RIGHT
-        ]
-        horiz = [l for l in other_lines if l[2] == "horizontal"]
-
-        choices = {}
-        for key, lst in [("straight", horiz), ("left", v_left), ("right", v_right)]:
-            if len(lst) == 1:
-                choices[key] = lst[0]
-        if not choices:
-            for key, lst in [
-                ("straight", horiz),
-                ("left", v_left),
-                ("right", v_right),
-            ]:
-                if len(lst) > 1:
-                    choices[key] = lst[0]
-
-        print("\n------Possible Destinations------")
-        for key, value in choices.items():
-            print(f"{key}: {value}")
-        print("")
-
-        if not choices:
-            self.decision = "straight"
-            chosen = [image_width // 2, image_height // 2]
-        else:
-            self.decision, chosen = random.choice(list(choices.items()))
-
-        offsets = {
-            "straight": config.CROSSING_OFFSET_TOP,
-            "left": config.CROSSING_OFFSET_LEFT,
-            "right": config.CROSSING_OFFSET_RIGHT,
-        }
-        target = np.array(chosen[:2]) + offsets[self.decision]
-
-        print(f"Decision: {self.decision}\n")
-        x = int(np.clip(target[0], 0, image_width))
-        y = int(np.clip(target[1], 0, image_height))
-
-        self.decision_waypoint = np.array([[x, y]])
+        self.decision = self._intersection_decisions.popleft()
+        self.decision_waypoint = config.CROSSING_OFFSET[self.decision]
         return self.decision_waypoint
 
     def can_intersect(self, image: np.ndarray, red_lines: list) -> bool:
         """Determine whether the robot can proceed at the intersection (traffic rules/checks)."""
+        # TODO: better logic, not just blue color
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, config.BLUE_HSV_LOWER, config.BLUE_HSV_UPPER)
         h, w = mask.shape

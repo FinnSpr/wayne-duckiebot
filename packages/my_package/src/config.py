@@ -4,18 +4,19 @@ from pathlib import Path
 import numpy as np
 
 # Modes configuration
-VIRTUAL = True
+VIRTUAL = False
 ENHANCED_LANE_DETECTION = True
-OBJECT_DETECTION = True
+OBJECT_DETECTION = False
 USE_WHEEL_ODOMETRY = True
 USE_TWIST = True
+INTERSECTION_DECISIONS = ["straight"] * 5
 
 HZ = 5 if VIRTUAL else 15
 
 # Testing locally, no ROS
 LOCAL_TESTING = os.environ.get("LOCAL_TESTING", "false").lower() == "true"
-TEST_DATA_ROOT = Path(__file__).parent.parent.parent.parent / "test_data"
-TEST_DATA_DIR = TEST_DATA_ROOT / "virtual" if VIRTUAL else TEST_DATA_ROOT / "physical"
+DATA_ROOT = Path(__file__).parent / "data"
+DATA_DIR = DATA_ROOT / "virtual" if VIRTUAL else DATA_ROOT / "physical"
 
 
 # ROS publishing configuration
@@ -24,30 +25,11 @@ PUBLISH_TO_WHEELS = True
 PUBLISH_VISUALIZATIONS = False
 
 # Calibration files
-EXTRINSIC_CALIBRATION_FILE = Path(
-    "/data/config/calibrations/camera_extrinsic/default.yaml"
-    if VIRTUAL
-    else "/data/config/calibrations/camera_extrinsic/wayne.yaml"  # TODO: fix this path
-)
-INTRINSIC_CALIBRATION_FILE = Path(
-    "/data/config/calibrations/camera_intrinsic/default.yaml"
-    if VIRTUAL
-    else "/data/config/calibrations/camera_intrinsic/wayne.yaml"  # TODO: fix this path
-)
-if LOCAL_TESTING:
-    EXTRINSIC_CALIBRATION_FILE = TEST_DATA_DIR / "extrinsic.yaml"
-    INTRINSIC_CALIBRATION_FILE = TEST_DATA_DIR / "intrinsic.yaml"
+EXTRINSIC_CALIBRATION_FILE = DATA_DIR / "extrinsic.yaml"
+INTRINSIC_CALIBRATION_FILE = DATA_DIR / "intrinsic.yaml"
 
 # OD Model
-if LOCAL_TESTING:
-    OD_MODEL_PATH = TEST_DATA_DIR / "od_model.onnx"
-else:
-    # TODO: set correct paths
-    import rospkg
-
-    rospack = rospkg.RosPack()
-    PKG_ROOT = Path(rospack.get_path("my_package"))
-    MODEL_PATH = PKG_ROOT / "object_detection.onnx"
+OD_MODEL_PATH = DATA_DIR / "od_model.onnx"
 OD_CONF_THRESHOLD = 0.4
 
 # Duckietown constants
@@ -57,15 +39,16 @@ DUCKIE_RADIUS = 0.025  # 2.5 cm
 BOT_WIDTH = 0.1  # 10 cm
 
 # Obstacle avoidance
+WHEEL_TO_FRONT_OFFSET = 0.06  # 6 cm
 LANE_POLY_EPSILON = 5.0  # pixels
 AVOIDANCE_MARGIN = 0.03  # 3 cm, margin from obstacles for path planning
 LAMBDA_OBSTACLES = 10.0
-FREE_Y_THRESHOLD = BOT_WIDTH / 2 + AVOIDANCE_MARGIN + 0.001
+FREE_X_THRESHOLD = BOT_WIDTH / 2 + AVOIDANCE_MARGIN + 0.001
 PLANNING_WEIGHT_FINAL_POSITION = 5.0
 
 # BEV ROI for obstacle avoidance
-BEV_SIZE = (TILE_WIDTH * 2, TILE_WIDTH * 2)  # meters (width, height/ahead)
-BEV_RESOLUTION = 0.002  # 0.2 cm per pixel
+BEV_SIZE = (TILE_WIDTH, TILE_WIDTH)  # meters (width, height/ahead)
+BEV_RESOLUTION = 0.001  # 0.1 cm per pixel
 
 # Hyperparameters dependent on VIRTUAL
 if VIRTUAL:
@@ -82,8 +65,16 @@ if VIRTUAL:
     YELLOW_HSV_UPPER = np.array([35, 255, 255])
 
     STOP_TIME = 1
-    FOLLOW_TIME = [4, 3, 2]  # left, top, right
-    FOLLOW_DISTANCE = [0.45, 0.35, 0.25]
+    FOLLOW_TIME = {
+        "left": 4,
+        "straight": 3,
+        "right": 2,
+    }
+    FOLLOW_DISTANCE = {
+        "left": 0.45,
+        "straight": 0.35,
+        "right": 0.25,
+    }
     CROSS_TIME = 1.5
 
     TURN_SPEED_LEFT_WHEEL = 0.0
@@ -116,14 +107,32 @@ else:
     YELLOW_HSV_UPPER = np.array([40, 255, 255])
 
     STOP_TIME = 2
-    FOLLOW_TIME = [1, 1.7, 1.2]  # left, top, right
-    FOLLOW_DISTANCE = [0.45, 0.35, 0.25]
+    FOLLOW_TIME = {
+        "left": 1,
+        "straight": 1.7,
+        "right": 1.2,
+    }
+    FOLLOW_DISTANCE = {
+        "left": 0.45,
+        "straight": 0.35,
+        "right": 0.25,
+    }
     CROSS_TIME = 1.5
 
     TURN_SPEED_LEFT_WHEEL = 0.0
     TURN_SPEED_RIGHT_WHEEL = 0.7
     TURN_TIME = 0.8
     TURN_DISTANCE = 0.07
+
+    # PID VALUES:
+    KP = 6.0
+    KI = 0.0
+    KD = 0.0
+    MAX_OMEGA = 3.0
+    INTEGRAL_LIMIT = 1.0
+    PID_MAX_DT = 0.5
+    # SLOW_DOWN_ON_TURN = False
+    # TURN_SLOWDOWN_GAIN = 0.5
 
 CROSSING_OFFSET_TOP = np.array([110, 0])
 
@@ -143,13 +152,18 @@ elif not VIRTUAL and not ENHANCED_LANE_DETECTION:
 else:
     BASE_SPEED = 0.3
     STEERING_GAIN = 0.3
+    CROSSING_OFFSET = {
+        "left": np.array([40, -230]),
+        "straight": np.array([100, 0]),
+        "right": np.array([80, 150]),
+    }
     CROSSING_OFFSET_LEFT = np.array([40, -230])
     CROSSING_OFFSET_RIGHT = np.array([80, 150])
     CROSSING_OFFSET_TOP = np.array([100, 0])
 
 # Global parameters
 MAX_SPEED_DIFF = 0.2
-WHITE_LANE_ONLY_BIGGEST_COMPONENT = True
+WHITE_LANE_ONLY_BIGGEST_COMPONENT = False
 N_WAYPOINTS = 6
 SINGLE_LANE_SCALE_FACTOR_WHITE = 0.9
 SINGLE_LANE_SCALE_FACTOR_YELLOW = 0.6
