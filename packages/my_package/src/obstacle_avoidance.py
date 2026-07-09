@@ -6,7 +6,6 @@ import image_utils
 import kinematics
 import numpy as np
 
-# TODO: add offset from (0, 0) to front of bot
 # TODO: should probably add cost for the heading of the bot
 # TODO: x, y coordinate mismatch
 
@@ -25,7 +24,7 @@ def cem_planner(
     omega_std: Union[float, np.ndarray] = 1.0,
     temperature: float = 0.1,
     omega_clip: Tuple[float, float] = (-np.pi, np.pi),
-    interp_steps: int = 3,
+    action_repeat: int = 4,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Cross-entropy method planner with MPPI-style elite weighting.
@@ -46,16 +45,21 @@ def cem_planner(
         omega_std: Initial std of angular velocity. Scalar or (horizon,).
         temperature: MPPI temperature for softmax weighting.
         omega_clip: (min, max) bounds for angular velocity.
-        interp_steps: Number of intermediate points to insert between
-            consecutive trajectory waypoints for finer cost evaluation
-            (0 = no interpolation).
+        action_repeat: Number of times each action is repeated with
+            proportionally smaller dt for finer cost evaluation
+            (1 = no repeat).
 
     Returns:
         (trajectory_positions, trajectory_actions) where
         positions is (horizon, 2) and actions is (horizon, 2) [v, omega].
     """
     start_pos = np.asarray(start_pos, dtype=np.float64)
+    start_angles = np.full(num_samples, start_angle)  # (N,)
+    start_positions = np.tile(start_pos, (num_samples, 1))  # (N, 2)
+
+    K = max(1, action_repeat)
     v_unrolled = np.full((num_samples, horizon), v_const, dtype=np.float64)
+    v_repeated = np.repeat(v_unrolled, K, axis=1)  # (N, H*K)
 
     # Broadcast initial distribution parameters to (horizon,).
     omega_mean = np.broadcast_to(
@@ -75,21 +79,24 @@ def cem_planner(
             omega_clip[0],
             omega_clip[1],
         )
+        omega_repeated = np.repeat(omega_samples, K, axis=1)  # (N, H*K)
 
-        # Roll out
-        start_positions = np.tile(start_pos, (num_samples, 1))  # (N, 2)
-        start_angles = np.full(num_samples, start_angle)  # (N,)
+        # Roll out with action repeat for fine-grained evaluation
         traj = kinematics.diff_drive_trajectory(
-            start_positions, start_angles, v_unrolled, omega_samples, dt
-        )  # (N, horizon, 3)
-        positions = traj[..., :2]  # (N, horizon, 2)
+            start_positions,
+            start_angles,
+            v_repeated,
+            omega_repeated,
+            dt / K,
+        )  # (N, H*K, 3)
+        positions = traj[..., :2]  # (N, H*K, 2)
+        angles = traj[..., 2]  # (N, H*K)
 
-        # Evaluate on intermediate points as well
-        if interp_steps > 0:
-            interpolated_positions = _add_interpolation_points(
-                positions, start_pos, interp_steps
-            )
-        costs = get_trajectories_score(interpolated_positions, cost_function)
+        # Evaluate cost at the front of the robot
+        front_positions = _offset_to_front(
+            positions, angles, offset=config.WHEEL_TO_FRONT_OFFSET
+        )
+        costs = get_trajectories_score(front_positions, cost_function)
 
         idx_min = np.argmin(costs)
         if costs[idx_min] < best_cost:
@@ -97,7 +104,8 @@ def cem_planner(
             best_actions = np.column_stack(
                 [v_unrolled[idx_min], omega_samples[idx_min]]
             )
-            best_positions = positions[idx_min]
+            # Return just the horizon endpoints (every K-th position)
+            best_positions = positions[idx_min, K - 1 :: K]
 
         # Elites
         elite_idx = np.argpartition(costs, num_elites)[:num_elites]
@@ -159,7 +167,7 @@ def get_planning_cost_function(
     polyline_epsilon: float = config.LANE_POLY_EPSILON,
     lambda_obstacle_distance: float = config.LAMBDA_OBSTACLES,
     lambda_polygon_distance: float = config.LAMBDA_OBSTACLES,
-    free_y_threshold: float = config.FREE_Y_THRESHOLD,
+    free_x_threshold: float = config.FREE_X_THRESHOLD,
 ):
     """
     Build a vectorized cost function for BEV planning.
@@ -188,7 +196,7 @@ def get_planning_cost_function(
         polyline_epsilon: approxPolyDP tolerance in pixels.
         lambda_obstacle_distance: Weight for obstacle proximity penalty.
         lambda_polygon_distance: Weight for polygon proximity penalty.
-        free_y_threshold: Positions with |y_lateral| below this skip
+        free_x_threshold: Positions with |x_forward| below this skip
             all penalties (default 0 = disabled).
 
     Returns:
@@ -226,7 +234,7 @@ def get_planning_cost_function(
             avoidance_margin,
             lambda_obstacle_distance,
             lambda_polygon_distance,
-            free_y_threshold,
+            free_x_threshold,
         )
 
     return cost_function
@@ -242,12 +250,12 @@ def planning_cost_function(
     avoidance_margin: float,
     lambda_obstacle_distance: float,
     lambda_polygon_distance: float,
-    free_y_threshold: float,
+    free_x_threshold: float,
 ) -> np.ndarray:
     """
     Soft navigation cost for each query position.
 
-    If abs(y_lateral) < free_y_threshold the cost is just distance to
+    If abs(x_forward) < free_x_threshold the cost is just distance to
     goal (all penalties skipped). Otherwise:
 
     cost = dist_to_goal
@@ -265,7 +273,7 @@ def planning_cost_function(
         avoidance_margin: Extra margin (metres).
         lambda_obstacle_distance: Weight for obstacle proximity penalty.
         lambda_polygon_distance: Weight for polygon proximity penalty.
-        free_y_threshold: Positions with |y_lateral| below this skip
+        free_x_threshold: Positions with |x_forward| below this skip
             all penalties (default 0 = disabled).
 
     Returns:
@@ -278,7 +286,7 @@ def planning_cost_function(
     dist_to_goal = np.linalg.norm(positions - goal_position, axis=1)
     cost = dist_to_goal.copy()
 
-    # --- soft obstacle penalty ---
+    # Obstacle penalty
     obs_threshold = obstacle_radius + bot_width / 2.0 + avoidance_margin
     if obstacle_positions.size > 0:
         diff = positions[:, np.newaxis, :] - obstacle_positions[np.newaxis, :, :]
@@ -288,14 +296,14 @@ def planning_cost_function(
         cost += penalty_obs * lambda_obstacle_distance
     obstacle_plus_goal_cost = cost.copy()
 
-    # --- soft polygon penalty ---
+    # Polygon penalty
     lane_margin = bot_width / 2.0 + avoidance_margin
     poly_dist = _polygon_distance(positions, drivable_polygon)
     penalty_poly = np.maximum(0.0, lane_margin - poly_dist)
     cost += penalty_poly * lambda_polygon_distance
 
-    # --- free-y override: skip all penalties near centre-line ---
-    free = positions[:, 0] < free_y_threshold
+    # skip penalties at bottom (cause polygon side is there)
+    free = positions[:, 0] < free_x_threshold
     cost = np.where(free, obstacle_plus_goal_cost, cost)
 
     return cost
@@ -430,42 +438,29 @@ def _mask_to_polyline(mask: np.ndarray, epsilon: float = 2.0) -> np.ndarray:
     return approx[:, 0, :].astype(np.float64)
 
 
-def _add_interpolation_points(
-    trajectories: np.ndarray,
-    start_pos: np.ndarray,
-    interp_steps: int,
+def _offset_to_front(
+    positions: np.ndarray,
+    angles: np.ndarray,
+    offset: float,
 ) -> np.ndarray:
     """
-    Insert linearly interpolated waypoints between consecutive positions.
+    Shift positions forward by the robot's front overhang.
 
-    For each trajecotory, prepends start_pos, then inserts interp_steps
-    evenly spaced intermediate points between each pair of consecutive
-    waypoints (including between start_pos and the first waypoint).
+    The robot's origin is at the wheel midpoint.  The chassis extends
+    ``offset`` metres ahead of that point.  This function projects each
+    position forward along the corresponding heading.
 
     Args:
-        trajectories: (N, H, 2) batch of trajectory waypoints.
-        start_pos: (2,) starting position shared by all trajectories.
-        interp_steps: Number of intermediate points per segment.
+        positions: (..., 2) world coordinates (x_forward, y_lateral).
+        angles: (...,) headings in radians.
+        offset: Forward overhang in metres (default 0.06).
 
     Returns:
-        (N, H + (H+1)*interp_steps, 2) interpolated trajectories.
+        (..., 2) shifted positions.
     """
-    if interp_steps == 0:
-        return trajectories
-
-    N, H, _ = trajectories.shape
-    start = np.broadcast_to(start_pos, (N, 1, 2))
-    # Prepend start_pos
-    padded = np.concatenate([start, trajectories], axis=1)
-    segment_points = interp_steps + 2
-    alphas = np.linspace(0.0, 1.0, segment_points, dtype=np.float64)
-    seg_start = padded[:, :H, np.newaxis, :]  # (N, H, 1, 2)
-    seg_end = padded[:, 1:, np.newaxis, :]  # (N, H, 1, 2)
-    a = alphas[np.newaxis, np.newaxis, :, np.newaxis]  # (1, 1, total, 1)
-    interp = seg_start * (1 - a) + seg_end * a  # (N, H, total, 2)
-
-    # Last point overlaps
-    interp_no_overlap = interp[..., :-1, :]  # (N, H, total-1, 2)
-    result = interp_no_overlap.reshape(N, H * (segment_points - 1), 2)
-    last = trajectories[:, -1:, :]  # (N, 1, 2)
-    return np.concatenate([result, last], axis=1)
+    positions = np.asarray(positions, dtype=np.float64)
+    angles = np.asarray(angles, dtype=np.float64)
+    result = positions.copy()
+    result[..., 0] += offset * np.cos(angles)
+    result[..., 1] += offset * np.sin(angles)
+    return result
