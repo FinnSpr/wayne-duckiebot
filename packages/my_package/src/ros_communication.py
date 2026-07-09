@@ -4,6 +4,7 @@ import os
 import config
 import cv2
 import numpy as np
+import ros_utils
 import rospy
 from cv_bridge import CvBridge
 from duckietown.dtros import DTROS, NodeType
@@ -31,17 +32,32 @@ class ROSCommunication(DTROS):
             bev_size=config.BEV_SIZE, bev_resolution=config.BEV_RESOLUTION
         )
 
-        # Self-driving pipeline
-        self._pipeline = SelfDrivingPipeline(
-            self._K, self._D, self._P, self._H, self.bev_cfg
-        )
-        self._pipeline.planner.set_intersection_decisions(config.INTERSECTION_DECISIONS)
-
         # Latest messages from each topic, initialized to None
         self._image = None
         self._unwarped_image = None
         self._left_encoder = None
         self._right_encoder = None
+
+        # Publisher
+        self._visualization_publishers: dict = {}
+        if config.PUBLISH_TO_WHEELS:
+            if config.USE_TWIST:
+                wheels_topic = f"/{self._vehicle_name}/car_cmd_switch_node/cmd"
+                self._wheel_publisher = rospy.Publisher(
+                    wheels_topic, Twist2DStamped, queue_size=1
+                )
+            else:
+                wheels_topic = f"/{self._vehicle_name}/wheels_driver_node/wheels_cmd"
+                self._wheel_publisher = rospy.Publisher(
+                    wheels_topic, WheelsCmdStamped, queue_size=1
+                )
+        ros_utils.wait_for_connection(self._wheel_publisher)
+
+        # Self-driving pipeline
+        self._pipeline = SelfDrivingPipeline(
+            self._K, self._D, self._P, self._H, self.bev_cfg
+        )
+        self._pipeline.planner.set_intersection_decisions(config.INTERSECTION_DECISIONS)
 
         # Subscribers
         rospy.Subscriber(
@@ -59,20 +75,6 @@ class ROSCommunication(DTROS):
             WheelEncoderStamped,
             self.cb_right_encoder,
         )
-
-        # Publisher
-        self._visualization_publishers: dict = {}
-        if config.PUBLISH_TO_WHEELS:
-            if config.USE_TWIST:
-                wheels_topic = f"/{self._vehicle_name}/car_cmd_switch_node/cmd"
-                self._wheel_publisher = rospy.Publisher(
-                    wheels_topic, Twist2DStamped, queue_size=1
-                )
-            else:
-                wheels_topic = f"/{self._vehicle_name}/wheels_driver_node/wheels_cmd"
-                self._wheel_publisher = rospy.Publisher(
-                    wheels_topic, WheelsCmdStamped, queue_size=1
-                )
 
     # --- Callbacks ---
     def cb_camera(self, msg):

@@ -9,7 +9,7 @@ import config
 import cv2
 import numpy as np
 from control import Controller
-from image_utils import BEVConfig
+import image_utils
 from obstacle_avoidance import cem_planner, get_planning_cost_function
 
 # from obstacle_avoidance import cem_planner, get_planning_cost_function
@@ -26,14 +26,14 @@ class SelfDrivingPipeline:
         D: np.ndarray,
         P: np.ndarray,
         H: np.ndarray,
-        bev_config: BEVConfig,
+        bev_config: image_utils.BEVConfig,
     ):
-        self._K = K
-        self._D = D
-        self._P = P
-        self._H = H
         self.bev_config = bev_config
-        self.perception = PerceptionModule(use_object_detection=config.OBJECT_DETECTION)
+        self.avoidance_cost_fn = None
+
+        self.perception = PerceptionModule(
+            K=K, D=D, P=P, H=H, use_object_detection=config.OBJECT_DETECTION
+        )
         self.world_model = WorldModel()
         self.planner = BehaviorPlanner()
         self.controller = Controller()
@@ -64,19 +64,18 @@ class SelfDrivingPipeline:
         left_encoder: int,
         right_encoder: int,
     ) -> Tuple[float, float, Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+        self.planner.construct_timers_if_needed()
+
         # Perception
         self.perception.perceive(
             image,
             use_enhanced=config.ENHANCED_LANE_DETECTION,
             world_model=self.world_model,
-            K=self._K,
-            D=self._D,
-            P=self._P,
         )
 
         # State update
-        # TODO: maybe forward to update_state instaed
         self.planner.set_ticks(left_encoder, right_encoder)
+        self.planner.duckie_in_roi = self._check_duckie_in_roi()
         self.planner.stop_line_area = np.sum(
             self.perception.red_mask[config.STOP_MARKER_Y :, :] > 0
         )
@@ -117,22 +116,25 @@ class SelfDrivingPipeline:
         )
 
     def _waypoints_follow(self) -> Optional[np.ndarray]:
-        return self.planner.get_intersection_waypoint()
+        return np.array([self.planner.get_intersection_waypoint()])
 
     def _waypoints_duckie_avoid(self) -> Optional[np.ndarray]:
         """Drive waypoints offset sideways away from nearest duckie."""
         waypoints = self._waypoints_drive()
         target_waypoint = waypoints[0]
-        planning_cost_fn = get_planning_cost_function(
-            self.perception.left_white_lane,
-            self.perception.right_white_lane,
-            self.perception.detection_bottom_centers,
-            target_waypoint,
-            self._H,
-            self.bev_config,
+        self.avoidance_cost_fn = get_planning_cost_function(
+            left_lane_mask=self.perception.left_white_lane,
+            right_lane_mask=self.perception.right_white_lane,
+            obstacle_bottom_image_coords=self.perception.detection_bottom_centers,
+            goal_position_image_coords=target_waypoint,
+            H_image_to_metric=self.perception.H,
+            bev_cfg=self.bev_config,
         )
-        obstacle_avoidance_waypoints = cem_planner(cost_function=planning_cost_fn)
-        return obstacle_avoidance_waypoints
+        obstacle_avoidance_waypoints = cem_planner(cost_function=self.avoidance_cost_fn)
+        waypoints_image = image_utils.world_to_image_coords(
+            obstacle_avoidance_waypoints, self.perception.H
+        )
+        return waypoints_image
 
     def _speed_drive(self, waypoints: Optional[np.ndarray]) -> Tuple[float, float]:
         """Normal lane-following: heading error → wheel speeds."""
@@ -170,13 +172,16 @@ class SelfDrivingPipeline:
             self.planner.intersection_speed = self._speed_drive(waypoints)
         return self.planner.intersection_speed
 
-    def _check_duckie_nearby(self) -> bool:
-        """Return True if any duckie is close enough to trigger avoidance."""
-        p = self.perception
-        if len(p.detection_bottom_centers) == 0:
+    def _check_duckie_in_roi(self) -> bool:
+        """Check if any detected duckies are in the ROI."""
+        detections = self.perception.detection_bottom_centers_world
+        if detections.size == 0:
             return False
-        threshold_y = p.image_height * getattr(config, "DUCKIE_NEARBY_Y_RATIO", 0.6)
-        return bool(np.any(p.detection_bottom_centers[:, 1] > threshold_y))
+        roi = config.AVOIDANCE_START_ABSOLUTE_ROI
+        in_roi = (np.abs(detections[:, 0]) < roi[0]) & (
+            np.abs(detections[:, 1]) < roi[1]
+        )
+        return np.any(in_roi)
 
     def get_visualizations(
         self,
@@ -188,11 +193,11 @@ class SelfDrivingPipeline:
             return {}, {}
         perception = self.perception
 
-        white_combined = perception.right_white_lane.copy()
+        white_combined = np.full(image.shape[:2], 0, dtype=np.uint8)
         if perception.left_white_lane is not None:
-            white_combined = cv2.bitwise_or(
-                perception.left_white_lane, perception.right_white_lane
-            )
+            white_combined = cv2.bitwise_or(white_combined, perception.left_white_lane)
+        if perception.right_white_lane is not None:
+            white_combined = cv2.bitwise_or(white_combined, perception.right_white_lane)
 
         visualization = self.visualizer.visualize(
             perception.proc_image,
@@ -209,6 +214,11 @@ class SelfDrivingPipeline:
             "unwarped_image": perception.proc_image,
             "image": image,
         }
+        if self.avoidance_cost_fn is not None:
+            color_vis["heatmap"] = image_utils.get_bev_heatmap_image(
+                self.avoidance_cost_fn, self.bev_config
+            )
+
         bw_vis: Dict[str, np.ndarray] = {}
         if perception.edge_mask is not None:
             bw_vis["edge_mask"] = perception.edge_mask

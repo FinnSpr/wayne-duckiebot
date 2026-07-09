@@ -60,9 +60,12 @@ class Visualizer:
     ) -> np.ndarray:
         # Dim everything to 15%, then restore lane pixels to full brightness
         vis = (image * 0.15).astype(np.uint8)
-        vis[white_mask > 0] = image[white_mask > 0]
-        vis[yellow_mask > 0] = image[yellow_mask > 0]
-        vis[red_mask > 0] = image[red_mask > 0]
+        if white_mask is not None:
+            vis[white_mask > 0] = image[white_mask > 0]
+        if yellow_mask is not None:
+            vis[yellow_mask > 0] = image[yellow_mask > 0]
+        if red_mask is not None:
+            vis[red_mask > 0] = image[red_mask > 0]
 
         if white_spline is not None:
             wx, wy = white_spline

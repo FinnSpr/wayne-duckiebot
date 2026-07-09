@@ -1,10 +1,10 @@
-from typing import List, Tuple
+from typing import List
 
 import config
 import cv2
 import numpy as np
-from image_utils import unwarp_image
-from object_detection import ODModel, get_bottom_center_detections
+import image_utils
+from object_detection import ODModel, get_bottom_center_detections, get_negative_mask
 from world_model import WorldModel
 
 
@@ -16,15 +16,22 @@ class PerceptionModule:
 
     def __init__(
         self,
+        K: np.ndarray,
+        D: np.ndarray,
+        P: np.ndarray,
+        H: np.ndarray,
         use_object_detection: bool = False,
-        min_lane_pixels: int = config.MIN_LANE_PIXELS,
     ):
         self.use_object_detection = use_object_detection
-        self.min_lane_pixels = min_lane_pixels
         if self.use_object_detection:
             self.od_model = ODModel()
         else:
             self.od_model = None
+
+        self.K = K
+        self.D = D
+        self.P = P
+        self.H = H
 
         # Cached perception results
         self.proc_image: np.ndarray = None
@@ -39,16 +46,70 @@ class PerceptionModule:
         self.image_width: int = 0
         self.image_height: int = 0
 
-    def filter_red(self, hsv: np.ndarray) -> np.ndarray:
-        """Extract red color mask from HSV image."""
-        mask1 = cv2.inRange(hsv, config.RED_HSV_LOWER_1, config.RED_HSV_UPPER_1)
-        mask2 = cv2.inRange(hsv, config.RED_HSV_LOWER_2, config.RED_HSV_UPPER_2)
-        return cv2.bitwise_or(mask1, mask2)
+    def perceive(
+        self,
+        image: np.ndarray,
+        use_enhanced: bool = True,
+        world_model: WorldModel = None,
+    ) -> None:
+        """Run the full perception pipeline and cache results as member variables.
+
+        After calling this, the following attributes are populated:
+            proc_image, right_white_lane, left_white_lane, yellow_mask,
+            red_mask, edge_mask, white_color, detections,
+            detection_bottom_centers, image_width, image_height,
+            white_spline, yellow_spline (when world_model given).
+        """
+        if use_enhanced and self.K is not None:
+            self.proc_image = image_utils.unwarp_image(image, self.K, self.D, self.P)
+        else:
+            self.proc_image = image
+        self.image_height, self.image_width = self.proc_image.shape[:2]
+
+        # Object detection
+        if self.use_object_detection:
+            self.detections = self.od_model.get_detections(self.proc_image)
+            self.detection_bottom_centers = get_bottom_center_detections(
+                self.detections
+            )
+            self.detection_bottom_centers_world = image_utils.image_to_world_coords(
+                self.detection_bottom_centers, self.H
+            )
+            detections_negative_mask = get_negative_mask(
+                self.image_height, self.image_width, self.detections
+            )
+        else:
+            self.detections = np.empty((0, 6))
+            self.detection_bottom_centers = np.empty((0, 2))
+            self.detection_bottom_centers_world = np.empty((0, 2))
+            detections_negative_mask = None
+
+        if use_enhanced:
+            self.filter_lane_colors_enhanced(self.proc_image, detections_negative_mask)
+        else:
+            self.filter_lane_colors_standard(self.proc_image)
+            self.left_white_lane = None
+            self.edge_mask = None
+            self.white_color = self.right_white_lane
+        self._apply_lane_roi()
+
+        # Spline fitting
+        if world_model is not None:
+            self.white_spline = world_model.fit_spline(
+                self.right_white_lane, take_leftmost_pixels=False
+            )
+            self.yellow_spline = world_model.fit_spline(
+                self.yellow_mask, take_leftmost_pixels=True
+            )
+        else:
+            self.white_spline = None
+            self.yellow_spline = None
 
     def filter_lane_colors_enhanced(
         self, image: np.ndarray, obstacle_negative_mask: np.ndarray = None
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Enhanced lane filtering using Sobel edge magnitudes and HSV color masks."""
+    ) -> None:
+        """Enhanced lane filtering using Sobel edge magnitudes and HSV color masks.
+        Saves results directly to self."""
         blurred = cv2.GaussianBlur(image, (0, 0), sigmaX=config.SIGMA)
         gray = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
         sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
@@ -66,8 +127,11 @@ class PerceptionModule:
             hsv, config.YELLOW_HSV_LOWER, config.YELLOW_HSV_UPPER
         )
         white_color = cv2.bitwise_and(white_color, cv2.bitwise_not(yellow_color))
+        red_color = self.filter_red(hsv)
         if obstacle_negative_mask is not None:
+            # TODO: hacks, remove when segmentation
             yellow_color = cv2.bitwise_and(yellow_color, obstacle_negative_mask)
+            red_color = cv2.bitwise_and(red_color, obstacle_negative_mask)
 
         if config.VIRTUAL:
             green_mask = cv2.inRange(
@@ -78,41 +142,40 @@ class PerceptionModule:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         white_color = cv2.morphologyEx(white_color, cv2.MORPH_OPEN, kernel)
 
-        red_color = self.filter_red(hsv)
         white_edges = cv2.bitwise_and(white_color, edge_mask)
-        right_edge_right_white_lane = cv2.bitwise_and(
+        self.right_white_lane = cv2.bitwise_and(
             white_edges, cv2.bitwise_and(mask_sobelx_neg, mask_sobely_pos)
         )
-        left_edge_left_white_lane = cv2.bitwise_and(
+        self.left_white_lane = cv2.bitwise_and(
             white_edges, cv2.bitwise_and(mask_sobelx_pos, mask_sobely_pos)
         )
 
         if config.WHITE_LANE_ONLY_BIGGEST_COMPONENT:
-            right_edge_right_white_lane = self._get_biggest_component(
-                right_edge_right_white_lane
-            )
-            left_edge_left_white_lane = self._get_biggest_component(
-                left_edge_left_white_lane
-            )
+            self.right_white_lane = self._get_biggest_component(self.right_white_lane)
+            self.left_white_lane = self._get_biggest_component(self.left_white_lane)
 
-        yellow_mask = cv2.bitwise_and(yellow_color, edge_mask)
-        yellow_mask = cv2.bitwise_and(
-            yellow_mask, cv2.bitwise_and(mask_sobelx_pos, mask_sobely_pos)
+        self.yellow_mask = cv2.bitwise_and(yellow_color, edge_mask)
+        self.yellow_mask = cv2.bitwise_and(
+            self.yellow_mask, cv2.bitwise_and(mask_sobelx_pos, mask_sobely_pos)
         )
 
-        return (
-            self._ensure_min_pixels(right_edge_right_white_lane),
-            self._ensure_min_pixels(left_edge_left_white_lane),
-            self._ensure_min_pixels(yellow_mask),
-            red_color,
-            edge_mask,
-            white_color,
-        )
+        self._apply_lane_roi()
+        self.right_white_lane = self._ensure_min_pixels(self.right_white_lane)
+        self.left_white_lane = self._ensure_min_pixels(self.left_white_lane)
+        self.yellow_mask = self._ensure_min_pixels(self.yellow_mask)
+        self.red_mask = red_color
+        self.edge_mask = edge_mask
+        self.white_color = white_color
 
-    def filter_lane_colors_standard(
-        self, image: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Standard lane filtering using simple HSV ranges."""
+    def filter_red(self, hsv: np.ndarray) -> np.ndarray:
+        """Extract red color mask from HSV image."""
+        mask1 = cv2.inRange(hsv, config.RED_HSV_LOWER_1, config.RED_HSV_UPPER_1)
+        mask2 = cv2.inRange(hsv, config.RED_HSV_LOWER_2, config.RED_HSV_UPPER_2)
+        return cv2.bitwise_or(mask1, mask2)
+
+    def filter_lane_colors_standard(self, image: np.ndarray) -> None:
+        """Standard lane filtering using simple HSV ranges.
+        Saves results directly to self."""
         _, width = image.shape[:2]
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
@@ -128,70 +191,9 @@ class PerceptionModule:
 
         white_mask[:, : width // 2] = 0
 
-        return white_mask, yellow_mask, red_mask
-
-    def perceive(
-        self,
-        image: np.ndarray,
-        use_enhanced: bool = True,
-        world_model: WorldModel = None,
-        K: np.ndarray = None,
-        D: np.ndarray = None,
-        P: np.ndarray = None,
-    ) -> None:
-        """Run the full perception pipeline and cache results as member variables.
-
-        After calling this, the following attributes are populated:
-            proc_image, right_white_lane, left_white_lane, yellow_mask,
-            red_mask, edge_mask, white_color, detections,
-            detection_bottom_centers, image_width, image_height,
-            white_spline, yellow_spline (when world_model given).
-        """
-        if use_enhanced and K is not None:
-            self.proc_image = unwarp_image(image, K, D, P)
-        else:
-            self.proc_image = image
-        self.image_height, self.image_width = self.proc_image.shape[:2]
-
-        if use_enhanced:
-            (
-                self.right_white_lane,
-                self.left_white_lane,
-                self.yellow_mask,
-                self.red_mask,
-                self.edge_mask,
-                self.white_color,
-            ) = self.filter_lane_colors_enhanced(self.proc_image)
-        else:
-            self.right_white_lane, self.yellow_mask, self.red_mask = (
-                self.filter_lane_colors_standard(self.proc_image)
-            )
-            self.left_white_lane = None
-            self.edge_mask = None
-            self.white_color = self.right_white_lane
-        self._apply_lane_roi()
-
-        # Object detection
-        if self.use_object_detection:
-            self.detections = self.od_model.get_detections(self.proc_image)
-            self.detection_bottom_centers = get_bottom_center_detections(
-                self.detections
-            )
-        else:
-            self.detections = np.empty((0, 6))
-            self.detection_bottom_centers = np.empty((0, 2))
-
-        # Spline fitting
-        if world_model is not None:
-            self.white_spline = world_model.fit_spline(
-                self.right_white_lane, take_leftmost_pixels=False
-            )
-            self.yellow_spline = world_model.fit_spline(
-                self.yellow_mask, take_leftmost_pixels=True
-            )
-        else:
-            self.white_spline = None
-            self.yellow_spline = None
+        self.right_white_lane = white_mask
+        self.yellow_mask = yellow_mask
+        self.red_mask = red_mask
 
     def _apply_lane_roi(self) -> None:
         roi = config.HIDE_TOP_OF_IMAGE
@@ -202,8 +204,8 @@ class PerceptionModule:
 
     def _ensure_min_pixels(self, mask: np.ndarray) -> np.ndarray:
         """Ensure that the mask has at least min_pixels non-zero pixels."""
-        if np.count_nonzero(mask) < self.min_lane_pixels:
-            return np.zeros_like(mask)
+        if np.count_nonzero(mask) < config.MIN_LANE_PIXELS:
+            return None
         return mask
 
     def _get_biggest_component(self, mask: np.ndarray) -> np.ndarray:

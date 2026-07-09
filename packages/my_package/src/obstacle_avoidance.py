@@ -6,25 +6,24 @@ import image_utils
 import kinematics
 import numpy as np
 
-# TODO: should probably add cost for the heading of the bot
-# TODO: x, y coordinate mismatch
+# TODO: should maybe add cost for the heading of the bot
 
 
 def cem_planner(
     cost_function: callable,
     start_pos: Tuple[float, float] = (0, 0),
     start_angle: float = 0.0,
-    horizon: int = 5,
-    num_samples: int = 200,
-    num_elites: int = 20,
-    num_iterations: int = 3,
-    dt: float = 1.0,
-    v_const: float = 0.1,
-    omega_mean: Union[float, np.ndarray] = 0.0,
-    omega_std: Union[float, np.ndarray] = 1.0,
-    temperature: float = 0.1,
-    omega_clip: Tuple[float, float] = (-np.pi, np.pi),
-    action_repeat: int = 4,
+    horizon: int = config.CEM_HORIZON,
+    num_samples: int = config.CEM_NUM_SAMPLES,
+    num_elites: int = config.CEM_NUM_ELITES,
+    num_iterations: int = config.CEM_NUM_ITERATIONS,
+    dt: float = config.CEM_DT,
+    v_const: float = config.CEM_V_CONST,
+    omega_mean: Union[float, np.ndarray] = config.CEM_OMEGA_MEAN,
+    omega_std: Union[float, np.ndarray] = config.CEM_OMEGA_STD,
+    temperature: float = config.CEM_TEMPERATURE,
+    omega_clip: Tuple[float, float] = config.CEM_OMEGA_CLIP,
+    action_repeat: int = config.CEM_ACTION_REPEAT,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Cross-entropy method planner with MPPI-style elite weighting.
@@ -70,7 +69,6 @@ def cem_planner(
     ).copy()
 
     best_cost = np.inf
-    best_actions = None
     best_positions = None
 
     for _ in range(num_iterations):
@@ -101,9 +99,6 @@ def cem_planner(
         idx_min = np.argmin(costs)
         if costs[idx_min] < best_cost:
             best_cost = costs[idx_min]
-            best_actions = np.column_stack(
-                [v_unrolled[idx_min], omega_samples[idx_min]]
-            )
             # Return just the horizon endpoints (every K-th position)
             best_positions = positions[idx_min, K - 1 :: K]
 
@@ -123,7 +118,7 @@ def cem_planner(
         omega_std = np.sqrt((w[:, None] * (elite_omega - omega_mean) ** 2).sum(axis=0))
         omega_std = np.maximum(omega_std, 1e-4)
 
-    return best_positions, best_actions
+    return best_positions
 
 
 def get_trajectories_score(

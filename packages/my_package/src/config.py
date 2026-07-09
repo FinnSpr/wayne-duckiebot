@@ -39,12 +39,26 @@ DUCKIE_RADIUS = 0.025  # 2.5 cm
 BOT_WIDTH = 0.1  # 10 cm
 
 # Obstacle avoidance
+AVOIDANCE_START_ABSOLUTE_ROI = (TILE_WIDTH, BOT_WIDTH)  # (ahead, each side)
 WHEEL_TO_FRONT_OFFSET = 0.06  # 6 cm
 LANE_POLY_EPSILON = 5.0  # pixels
 AVOIDANCE_MARGIN = 0.03  # 3 cm, margin from obstacles for path planning
 LAMBDA_OBSTACLES = 10.0
 FREE_X_THRESHOLD = BOT_WIDTH / 2 + AVOIDANCE_MARGIN + 0.001
 PLANNING_WEIGHT_FINAL_POSITION = 5.0
+
+# CEM planning
+CEM_HORIZON = 5
+CEM_NUM_SAMPLES = 200
+CEM_NUM_ELITES = 20
+CEM_NUM_ITERATIONS = 3
+CEM_DT = 1.0  # seconds per one planning (big) step
+CEM_V_CONST = 0.1
+CEM_OMEGA_MEAN = 0.0
+CEM_OMEGA_STD = 1.0
+CEM_TEMPERATURE = 1.0  # for MPPI weighing
+CEM_OMEGA_CLIP = (-1.0, 1.0)
+CEM_ACTION_REPEAT = 4  # how many small steps are there in one planning big step
 
 # BEV ROI for obstacle avoidance
 BEV_SIZE = (TILE_WIDTH, TILE_WIDTH)  # meters (width, height/ahead)
@@ -95,7 +109,7 @@ if VIRTUAL:
     TURN_SLOWDOWN_GAIN = 0.5  # v = BASE_SPEED * (1 - GAIN * |heading_error|); 0 disables, 1 = full stop at max error
 else:
     MIN_LANE_PIXELS = 100
-    HIDE_TOP_OF_IMAGE = 200
+    HIDE_TOP_OF_IMAGE = 175
     CROSSING_OFFSET_LEFT = np.array([160, -300])
     CROSSING_OFFSET_RIGHT = np.array([150, -140])
     MIN_AREA = 200
@@ -150,7 +164,7 @@ elif not VIRTUAL and not ENHANCED_LANE_DETECTION:
     IMAGE_WIDTH_OFFSET_FACTOR_YELLOW = 0.15
     IMAGE_WIDTH_OFFSET_FACTOR_WHITE = 0.25
 else:
-    BASE_SPEED = 0.3
+    BASE_SPEED = 0.1
     STEERING_GAIN = 0.3
     CROSSING_OFFSET = {
         "left": np.array([40, -230]),

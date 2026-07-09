@@ -80,7 +80,7 @@ def get_negative_mask(H: int, W: int, bboxes: list) -> np.ndarray:
     """
     mask = np.full((H, W), 255, dtype=np.uint8)
     for bbox in bboxes:
-        x1, y1, x2, y2 = bbox
+        x1, y1, x2, y2, _, _ = bbox
         x1, y1 = int(max(0, x1)), int(max(0, y1))
         x2, y2 = int(min(W, x2)), int(min(H, y2))
         if x2 > x1 and y2 > y1:
@@ -92,7 +92,7 @@ def get_bottom_center_detections(bboxes: list) -> np.ndarray:
     """Returns bottom-center points from a list of bounding boxes.
 
     Args:
-        bboxes: List of bounding boxes, each as [x1, y1, x2, y2].
+        bboxes: List of bounding boxes, each as [x1, y1, x2, y2, score, class_id].
 
     Returns:
         bottom_center_detections: Numpy array of shape (N, 2) where each row is

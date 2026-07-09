@@ -20,6 +20,9 @@ class WorldModel:
         self, mask: np.ndarray, take_leftmost_pixels: bool = True
     ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """Fits a cubic spline to the non-zero pixels in a binary mask."""
+        if mask is None:
+            return None
+
         ys, xs = np.where(mask > 0)
 
         if len(xs) < config.MIN_LANE_PIXELS:

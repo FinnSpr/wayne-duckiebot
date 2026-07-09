@@ -35,8 +35,8 @@ class BehaviorPlanner:
 
     def __init__(self):
         self.state = State.DRIVE
-        self.state_entered_at = time.time()
-        self.time_last_waypoint = time.time()
+        self.state_entered_at = None
+        self.time_last_waypoint = None
         self.prev_state = State.DRIVE
         self.blocked_state_last_time = None
         self.remained_in_blocked_state = 0.0
@@ -44,7 +44,7 @@ class BehaviorPlanner:
         # Perception inputs (set by pipeline each frame before update_state)
         self.stop_line_area = 0
         self.is_blocked = False
-        self.duckie_nearby = False
+        self.duckie_in_roi = False
 
         self._intersection_decisions = deque()
         self.decision_waypoint = None
@@ -60,13 +60,22 @@ class BehaviorPlanner:
         self._transitions = [
             Transition(State.DRIVE, State.STOP, condition=self._should_stop),
             Transition(State.DRIVE, State.TURN, condition=self._should_turn),
-            # Transition(State.DRIVE, State.DUCKIE_AVOID, condition=self._duckie_too_close),
             Transition(State.STOP, State.FOLLOW, condition=self._stop_elapsed),
             Transition(State.FOLLOW, State.CROSS, condition=self._follow_finished),
             Transition(State.CROSS, State.DRIVE, condition=self._cross_elapsed),
             Transition(State.TURN, State.DRIVE, condition=self._turn_finished),
-            # Transition(State.DUCKIE_AVOID, State.DRIVE, condition=self._duckie_clear),
+            Transition(State.DRIVE, State.DUCKIE_AVOID, condition=self._duckie_in_roi),
+            Transition(
+                State.DUCKIE_AVOID, State.DRIVE, condition=self._no_duckies_in_roi
+            ),
         ]
+
+    def construct_timers_if_needed(self):
+        """Constructs timers for the FSM if they haven't been initialized yet."""
+        if self.state_entered_at is None:
+            self.state_entered_at = time.time()
+        if self.time_last_waypoint is None:
+            self.time_last_waypoint = time.time()
 
     def set_intersection_decisions(self, decisions: list) -> None:
         self._intersection_decisions = deque(decisions)
@@ -142,6 +151,8 @@ class BehaviorPlanner:
         return self.time_passed(config.STOP_TIME)
 
     def _follow_finished(self) -> bool:
+        if not self.decision:
+            return False
         d = config.FOLLOW_DISTANCE[self.decision]
         t = config.FOLLOW_TIME[self.decision]
         if config.USE_WHEEL_ODOMETRY:
@@ -156,17 +167,11 @@ class BehaviorPlanner:
             return self.distance_passed(config.TURN_DISTANCE)
         return self.time_passed(config.TURN_TIME)
 
-    def _duckie_too_close(self) -> bool:
-        return self.duckie_nearby
+    def _no_duckies_in_roi(self) -> bool:
+        return not self.duckie_in_roi
 
-    def _duckie_clear(self) -> bool:
-        """Exit DUCKIE_AVOID after no nearby duckie for a cooldown period."""
-        if self.duckie_nearby:
-            self._duckie_last_seen_at = time.time()
-            return False
-        return time.time() - self._duckie_last_seen_at >= getattr(
-            config, "DUCKIE_AVOID_CLEAR_TIME", 2.0
-        )
+    def _duckie_in_roi(self) -> bool:
+        return self.duckie_in_roi
 
     def get_intersection_waypoint(self) -> Optional[np.ndarray]:
         """Get the waypoint for the current intersection decision."""
