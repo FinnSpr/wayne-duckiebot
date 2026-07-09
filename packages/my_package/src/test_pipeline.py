@@ -12,6 +12,8 @@ import sys
 
 os.environ["LOCAL_TESTING"] = "True"
 
+from typing import Optional, Tuple
+
 import config
 import cv2
 import numpy as np
@@ -24,7 +26,7 @@ def _natural_sort_key(name: str) -> list:
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
 
 
-def _load_image_paths(directory: str) -> list[str]:
+def _load_image_paths(directory: str) -> list:
     """Return sorted list of image-file paths inside *directory*."""
     exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
     paths = []
@@ -38,11 +40,11 @@ def _load_image_paths(directory: str) -> list[str]:
 def _build_composite_frame(
     color_vis: dict,
     bw_vis: dict,
-    cell_size: tuple[int, int] | None = None,
+    cell_size: Optional[Tuple[int, int]] = None,
     title: str = "",
-) -> np.ndarray | None:
+) -> Optional[np.ndarray]:
     """Stack every visualization into a single labelled grid image."""
-    all_imgs: list[tuple[str, np.ndarray]] = []
+    all_imgs: list[Tuple[str, np.ndarray]] = []
 
     # colour windows
     for name in ("image", "unwarped_image", "visualization"):
@@ -146,8 +148,7 @@ def main() -> None:
             print(f"Error: could not load image from {image_paths[0]}")
             sys.exit(1)
 
-        vel_left, vel_right, color_vis, bw_vis = pipeline.process(image)
-        print(f"vel_left={vel_left:.3f}  vel_right={vel_right:.3f}")
+        _, _, color_vis, bw_vis = pipeline.process(image, 0, 0)
 
         for vis_dict in [color_vis, bw_vis]:
             for name, img in vis_dict.items():
