@@ -27,14 +27,15 @@ class EKF:
     MAX_OMEGA = 20.0  # rad/s — set high enough to accommodate keypoint matching noise during sharp turns
 
     def __init__(self):
+        # state vector: [x, y, theta, bias]
         self.x = np.zeros((4, 1))
         # state covariance
         self.P = np.diag([0.1, 0.1, 0.05, 0.01])
-        # process noise for VO-primary prediction (higher position noise
-        # since VO scale is uncertain)
-        self.Q_vo = np.diag([0.005, 0.005, 0.05, 1e-5])
-        # process noise for IMU-fallback prediction
-        self.Q_imu = np.diag([0.005, 0.005, 0.002, 1e-5])
+
+        # process noise: visual odometry prediction
+        self.Q_vo = np.diag([0.02, 0.02, 0.2, 1e-2]) ** 2
+        # process noise: IMU prediction
+        self.Q_imu = np.diag([0.02, 0.02, 0.02, 1e-2]) ** 2
         # IMU measurement noise (rad/s)
         self.R_imu = np.array([[0.05]])
         # theta value at the start of the last predict step (needed by update_imu)
@@ -173,10 +174,7 @@ class VisualOdometry:
             os.makedirs(self.output_dir, exist_ok=True)
 
         self.trajectory = []  # (x, y, theta)
-
         self.camera_tilt_rad = np.pi / 12
-
-
 
     def _get_kp_desc(self, image):
         return self.orb.detectAndCompute(image, None)

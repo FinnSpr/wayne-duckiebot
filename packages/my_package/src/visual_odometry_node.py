@@ -34,10 +34,12 @@ class VisualOdometryNode(DTROS):
         self.left_ticks = None
         self.right_ticks = None
 
+        # IMU
         self.prev_left_ticks_imu = None
         self.prev_right_ticks_imu = None
         self.prev_left_ticks_vo = None
         self.prev_right_ticks_vo = None
+        self.imu_resps = []  # save response of a standing robot to calibrate gyro bias
 
         self.wheel_dist = 0.0   # distance (m) traveled since last VO frame
         self.frame_idx = 0
@@ -152,6 +154,20 @@ class VisualOdometryNode(DTROS):
         Runs a fallback EKF prediction between VO frames using raw gyro + wheel velocity."""
         if self.vo is None:
             return
+
+        self.imu_resps.append((msg.angular_velocity.z,
+                               msg.linear_acceleration.x,
+                               msg.linear_acceleration.y))
+        if len(self.imu_resps) >= 1000:
+            imu_resps = np.array(self.imu_resps)
+            avg_imu_resp = np.mean(imu_resps, axis=0)
+            std_imu_resp = np.std(imu_resps, axis=0)
+            rospy.loginfo(f"[IMU] Avg({len(self.imu_resps)}) samples: "
+                          f"omega.z={avg_imu_resp[0]:.4f} +- {std_imu_resp[0]:.4f}, "
+                          f"accel.x={avg_imu_resp[1]:.4f} +- {std_imu_resp[1]:.4f}, "
+                          f"accel.y={avg_imu_resp[2]:.4f} +- {std_imu_resp[2]:.4f}")
+            self.imu_resps = []
+
         now = msg.header.stamp.to_sec()
         self.latest_omega = msg.angular_velocity.z
 
@@ -226,11 +242,11 @@ class VisualOdometryNode(DTROS):
 
         success, reason = self.vo.process_frame(
             current_image,
-            scale_override=wheel_dist,   # VO t-vector scaled to wheel distance
-            v=v_vo,                      # wheel-encoder velocity drives EKF position
-            omega=self.latest_omega,     # IMU omega for update step (0 in simulator)
+            scale_override=wheel_dist,
+            v=v_vo,
+            omega=self.latest_omega,
             dt=dt_vo,
-            predict=True,                # EKF is updated here (primary path in simulator)
+            predict=True,
             frame_idx=self.frame_idx
         )
         self.frame_idx += 1
