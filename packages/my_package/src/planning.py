@@ -15,7 +15,7 @@ class State(Enum):
     FOLLOW = 3
     CROSS = 4
     TURN = 5
-    BLOCKED = 6
+    WAIT_FOR_INSTRUCTION = 6
     DUCKIE_AVOID = 7
 
 
@@ -38,15 +38,14 @@ class BehaviorPlanner:
         self.state_entered_at = None
         self.time_last_waypoint = None
         self.prev_state = State.DRIVE
-        self.blocked_state_last_time = None
-        self.remained_in_blocked_state = 0.0
 
         # Perception inputs (set by pipeline each frame before update_state)
         self.stop_line_area = 0
-        self.is_blocked = False
         self.duckie_in_roi = False
 
         self._intersection_decisions = deque()
+        self._instructions_completed = False
+
         self.decision_waypoint = None
         self.decision = None
         self.intersection_admitted = False
@@ -64,10 +63,20 @@ class BehaviorPlanner:
             Transition(State.FOLLOW, State.CROSS, condition=self._follow_finished),
             Transition(State.CROSS, State.DRIVE, condition=self._cross_elapsed),
             Transition(State.TURN, State.DRIVE, condition=self._turn_finished),
-            Transition(State.DRIVE, State.DUCKIE_AVOID, condition=self._duckie_in_roi),
             Transition(
-                State.DUCKIE_AVOID, State.DRIVE, condition=self._no_duckies_in_roi
+                State.DRIVE,
+                State.WAIT_FOR_INSTRUCTION,
+                condition=self._completed_instructions,
             ),
+            Transition(
+                State.WAIT_FOR_INSTRUCTION,
+                State.DRIVE,
+                condition=self._has_instructions,
+            ),
+            # Transition(State.DRIVE, State.DUCKIE_AVOID, condition=self._duckie_in_roi),
+            # Transition(
+            #     State.DUCKIE_AVOID, State.DRIVE, condition=self._no_duckies_in_roi
+            # ),
         ]
 
     def construct_timers_if_needed(self):
@@ -82,23 +91,6 @@ class BehaviorPlanner:
 
     def update_state(self):
         """Evaluate FSM transitions — call once per frame after feeding perception inputs."""
-        # TODO: What to do with blocked state?
-        # Currently I only put is_blocked = 0
-        if self.is_blocked and self.state != State.BLOCKED:
-            self.prev_state = self.state
-            self.change_state(State.BLOCKED)
-            return
-
-        if self.state == State.BLOCKED:
-            if self.blocked_state_last_time is not None:
-                self.remained_in_blocked_state += (
-                    time.time() - self.blocked_state_last_time
-                )
-            if not self.is_blocked:
-                self.state = self.prev_state
-                print(self.state)
-            return
-
         # Transitions
         for t in self._transitions:
             if t.from_state is self.state and t.condition():
@@ -110,17 +102,13 @@ class BehaviorPlanner:
         self.state = new_state
         self.state_entered_at = time.time()
         self.intersection_admitted = False
-        self.remained_in_blocked_state = 0.0
         if new_state == State.FOLLOW:
             self.decision_waypoint = None  # force fresh intersection choice
             self.decision = None
         print(self.state)
 
     def time_passed(self, duration: float) -> bool:
-        return (
-            time.time() - self.state_entered_at
-            >= duration + self.remained_in_blocked_state
-        )
+        return time.time() - self.state_entered_at >= duration
 
     def no_waypoint_passed(self, duration: float) -> bool:
         return time.time() - self.time_last_waypoint >= duration
@@ -140,6 +128,11 @@ class BehaviorPlanner:
         return d_A >= distance
 
     # Transition conditions
+    def _has_instructions(self) -> bool:
+        return len(self._intersection_decisions) > 0
+
+    def _completed_instructions(self) -> bool:
+        return self._completed_instructions
 
     def _should_stop(self) -> bool:
         return self.stop_line_area >= config.MIN_AREA

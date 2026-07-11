@@ -198,9 +198,13 @@ class PerceptionModule:
             white_edges, cv2.bitwise_and(mask_sobelx_pos, mask_sobely_pos)
         )
 
-        if config.WHITE_LANE_ONLY_BIGGEST_COMPONENT:
-            self.right_white_lane = self._get_biggest_component(self.right_white_lane)
-            self.left_white_lane = self._get_biggest_component(self.left_white_lane)
+        if config.WHITE_LANE_MIN_AREA > 0:
+            self.right_white_lane = self.filter_components_over_threshold(
+                self.right_white_lane
+            )
+            self.left_white_lane = self.filter_components_over_threshold(
+                self.left_white_lane
+            )
 
         self.yellow_mask = cv2.bitwise_and(yellow_color, edge_mask)
         self.yellow_mask = cv2.bitwise_and(
@@ -251,10 +255,21 @@ class PerceptionModule:
             return None
         return mask
 
-    def _get_biggest_component(self, mask: np.ndarray) -> np.ndarray:
-        """Return a binary mask of the biggest connected component."""
+    def filter_components_over_threshold(
+        self, mask: np.ndarray, min_area: float = config.WHITE_LANE_MIN_AREA
+    ) -> np.ndarray:
+        """Filter connected components by area threshold.
+
+        Returns a binary mask keeping only components whose area is at least
+        min_area. If min_area is None, uses config.WHITE_LANE_MIN_AREA.
+        """
+
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
         if num_labels <= 1:
             return np.zeros_like(mask)
-        largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
-        return (labels == largest_label).astype(np.uint8) * 255
+
+        filtered = np.zeros_like(mask)
+        for i in range(1, num_labels):
+            if stats[i, cv2.CC_STAT_AREA] >= min_area:
+                filtered[labels == i] = 255
+        return filtered

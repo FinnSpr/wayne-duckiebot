@@ -54,7 +54,7 @@ class SelfDrivingPipeline:
             State.FOLLOW: self._speed_follow,
             State.CROSS: self._speed_drive,
             State.TURN: self._speed_turn,
-            State.BLOCKED: self._speed_stop,
+            State.WAIT_FOR_INSTRUCTION: self._speed_stop,
             State.DUCKIE_AVOID: self._speed_drive,
         }
 
@@ -92,8 +92,8 @@ class SelfDrivingPipeline:
         speed_function = self._speed_by_state[self.planner.state]
         velocities = speed_function(waypoints)
 
-        self.planner.time_last_waypoint = time.time()
-        self.planner.blocked_state_last_time = time.time()
+        if waypoints is not None and len(waypoints) > 0:
+            self.planner.time_last_waypoint = time.time()
 
         color_vis, bw_vis = self.get_visualizations(
             self.perception.proc_image, waypoints
