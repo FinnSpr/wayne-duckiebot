@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Tuple
 
+import config
 import cv2
 import numpy as np
 import yaml
@@ -124,6 +125,69 @@ def unwarp_image(
     )
 
     return unwarped
+
+
+def adjust_image(
+    image: np.ndarray,
+    crop_top_y: int = config.HIDE_TOP_OF_IMAGE,
+    target_size: Tuple[int, int] = config.MODEL_INPUT_SIZE,
+) -> np.ndarray:
+    """
+    Crops the top rows of an image and resizes it to the target dimensions.
+
+    Args:
+        image: Original numpy array image (H, W, C).
+        crop_top_y: Number of pixels to remove from the top (Y-axis).
+        target_size: The desired output resolution as (width, height).
+
+    Returns:
+        np.ndarray: The cropped and resized image.
+    """
+    cropped_image = image[crop_top_y:, :]
+    resized_image = cv2.resize(
+        cropped_image, target_size, interpolation=cv2.INTER_LINEAR
+    )
+
+    return resized_image
+
+
+def adjust_homography(
+    H_image_to_metric: np.ndarray,
+    original_size: Tuple[int, int] = config.ORIGINAL_IMAGE_SIZE,
+    crop_top_y: int = config.HIDE_TOP_OF_IMAGE,
+    target_size: Tuple[int, int] = config.MODEL_INPUT_SIZE,
+) -> np.ndarray:
+    """
+    Adjusts the homography matrix to account for a top-crop and resize.
+    This creates a new matrix that maps pixels from the adjusted image directly
+    back to the original metric ground-plane.
+
+    Args:
+        H_image_to_metric: Original 3x3 homography matrix.
+        original_size: Resolution of the uncropped image as (width, height).
+        crop_top_y: Number of pixels removed from the top (Y-axis).
+        target_size: Resolution of the model input as (width, height).
+
+    Returns:
+        np.ndarray: The new 3x3 homography matrix.
+    """
+    orig_w, orig_h = original_size
+    target_w, target_h = target_size
+
+    cropped_h = orig_h - crop_top_y
+    scale_x = orig_w / float(target_w)
+    scale_y = cropped_h / float(target_h)
+    # scale_x = 1.0
+    # scale_y = 1.0
+
+    # Matrix M: Scales X and Y, then translates Y by the crop offset
+    M = np.array(
+        [[scale_x, 0.0, 0.0], [0.0, scale_y, float(crop_top_y)], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+
+    H_new = H_image_to_metric @ M
+    return H_new
 
 
 def build_image_to_bev_homography(

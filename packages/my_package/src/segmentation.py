@@ -2,19 +2,14 @@
 
 from pathlib import Path
 
+import config
 import cv2
 import numpy as np
 import onnxruntime as ort
-import rospkg
 
 print("AVAILABLE PROVIDERS: ", ort.get_available_providers())
 
-rospack = rospkg.RosPack()
-PKG_ROOT = Path(rospack.get_path("my_package"))
-SEG_MODEL_PATH = PKG_ROOT / "segmentation.onnx"  # yolov11n-seg end-to-end export
-
 # Threshold configurations
-CONF_THRESHOLD = 0.25
 STOP_AREA = 2000  # mask pixel-count considered "too close"
 CENTROID_INTERVAL = [160, 550, 100, 480]  # x1, x2, y1, y2 (net-input pixel space)
 MASK_ALPHA = 0.5  # overlay transparency for visualization
@@ -40,10 +35,10 @@ class SEGModel:
     def __init__(self, num_classes=5):
         print("Initializing End-to-End SEGModel with Custom Colors", flush=True)
 
-        if not SEG_MODEL_PATH.exists():
+        if not config.SEG_MODEL_PATH.exists():
             raise FileNotFoundError(
                 "ONNX model not found (did you download your trained model?):",
-                SEG_MODEL_PATH,
+                config.SEG_MODEL_PATH,
             )
 
         sess_opts = ort.SessionOptions()
@@ -51,7 +46,7 @@ class SEGModel:
         sess_opts.intra_op_num_threads = 4
 
         self.session = ort.InferenceSession(
-            str(SEG_MODEL_PATH),
+            str(config.SEG_MODEL_PATH),
             sess_options=sess_opts,
             providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
         )
@@ -81,8 +76,10 @@ class SEGModel:
         h, w = img_bgr.shape[:2]
 
         if h != self.net_h or w != self.net_w:
-            raise ValueError(
-                f"Image size {h}x{w} does not match ONNX! Expected {self.net_h}x{self.net_w}"
+            img_bgr = cv2.resize(
+                img_bgr,
+                (self.net_w, self.net_h),
+                interpolation=cv2.INTER_LINEAR,
             )
 
         img = img_bgr[:, :, ::-1].astype(self.in_dtype) / 255.0
@@ -106,7 +103,7 @@ class SEGModel:
         class_ids = preds[:, 5].astype(np.int32)
         mask_coeffs = preds[:, 6:]
 
-        keep = scores >= CONF_THRESHOLD
+        keep = scores >= config.SEG_CONF_THRESHOLD
         if not np.any(keep):
             return []
 
@@ -185,32 +182,25 @@ class SEGModel:
 
         return False
 
-    def get_yellow_lane_mask(self, detections=None) -> np.ndarray:
-        """Returns a binary mask (uint8: 0 or 1) for yellow lane markings (Class 0)."""
+    def get_lane_masks(self, detections=None):
+        """Returns (yellow_mask, white_mask, red_mask) each uint8 (0/255) of shape (H, W)."""
         detections = self._last_detections if detections is None else detections
-        mask_out = np.zeros((self.net_h, self.net_w), dtype=np.uint8)
+        masks = np.zeros((3, self.net_h, self.net_w), dtype=np.uint8)
         for det in detections:
-            if det["cls_id"] == 0:
-                mask_out[det["mask"]] = 1
-        return mask_out
+            cls_id = det["cls_id"]
+            if 0 <= cls_id <= 2:
+                masks[cls_id][det["mask"]] = 255
+        return masks[0], masks[1], masks[2]
 
-    def get_white_lane_mask(self, detections=None) -> np.ndarray:
-        """Returns a binary mask (uint8: 0 or 1) for white lane markings (Class 1)."""
+    def get_duckie_detections(self, detections=None):
+        """Returns class-3 (duckie) detections as [x1, y1, x2, y2, score, 3] rows."""
         detections = self._last_detections if detections is None else detections
-        mask_out = np.zeros((self.net_h, self.net_w), dtype=np.uint8)
+        duckie_bboxes = []
         for det in detections:
-            if det["cls_id"] == 1:
-                mask_out[det["mask"]] = 1
-        return mask_out
-
-    def get_red_lane_mask(self, detections=None) -> np.ndarray:
-        """Returns a binary mask (uint8: 0 or 1) for red lane markings (Class 2)."""
-        detections = self._last_detections if detections is None else detections
-        mask_out = np.zeros((self.net_h, self.net_w), dtype=np.uint8)
-        for det in detections:
-            if det["cls_id"] == 2:
-                mask_out[det["mask"]] = 1
-        return mask_out
+            if det["cls_id"] == 3:
+                x1, y1, x2, y2 = det["box"]
+                duckie_bboxes.append([x1, y1, x2, y2, det["score"], 3])
+        return np.array(duckie_bboxes) if duckie_bboxes else np.empty((0, 6))
 
     def get_detections(self, img):
         preds, proto = self._run_detector(img)
@@ -228,21 +218,16 @@ class SEGModel:
         self._last_detections = detections  # cached for visualization
         return self._should_stop(detections)
 
-    def visualize(self, img_bgr=None, detections=None, alpha=MASK_ALPHA):
-        """Colored mask overlay ONLY, blended onto the input frame without bounding boxes."""
-        img_bgr = self._last_img if img_bgr is None else img_bgr
+    def visualize(self, detections=None):
+        """Colored mask overlay on black background, without blending onto the input frame."""
         detections = self._last_detections if detections is None else detections
 
-        overlay = img_bgr.copy()
+        overlay = np.zeros((self.net_h, self.net_w, 3), dtype=np.uint8)
         for det in detections:
-            # Fetch your exact custom color, fallback to green
             color = self.class_colors.get(det["cls_id"], (0, 255, 0))
             overlay[det["mask"]] = color
 
-        # Blend the colored masks with the original image
-        out = cv2.addWeighted(overlay, alpha, img_bgr, 1 - alpha, 0)
-
-        return out
+        return overlay
 
     def class_map(self, detections=None, shape=None):
         """Raw per-pixel class-id map (background = -1)."""

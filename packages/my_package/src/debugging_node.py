@@ -72,10 +72,13 @@ _PAGE = r"""<!DOCTYPE html>
   <span class="stat" id="vel">v: {{ vel }}  ω: {{ omega }}</span>
   <span class="stat" id="time">Avg (last {{ n }}): {{ avg_ms }} ms</span>
 </div>
+<div class="bar" id="duckie-bar">
+  <span class="stat">Duckie bottom centers (world, m): {{ duckie_str }}</span>
+</div>
 <div class="grid" id="grid">
   {% if panels %}
   {% for p in panels %}
-  <div class="card">
+  <div class="card" data-panel="{{ p }}">
     <img src="/vis/{{ p }}" id="img-{{ p }}">
     <div class="lbl">{{ p }}</div>
   </div>
@@ -93,13 +96,48 @@ _PAGE = r"""<!DOCTYPE html>
     }
   }, 500);
 
-  // refresh stats every second
+  // refresh stats every second (also updates panel list dynamically)
   setInterval(function() {
     fetch('/stats')
       .then(r => r.json())
       .then(d => {
         document.getElementById('vel').textContent = 'v: ' + d.v + '  ω: ' + d.omega;
         document.getElementById('time').textContent = 'Avg (last ' + d.n + '): ' + d.avg_ms + ' ms';
+        // Update duckie centers
+        var duckieBar = document.getElementById('duckie-bar');
+        if (duckieBar) {
+          duckieBar.innerHTML = '<span class="stat">Duckie bottom centers (world, m): ' + (d.duckie_str || 'none') + '</span>';
+        }
+        // Update panels dynamically
+        var grid = document.getElementById('grid');
+        var existing = {};
+        grid.querySelectorAll('.card').forEach(function(c) {
+          var name = c.getAttribute('data-panel');
+          if (name && d.panels.indexOf(name) === -1) {
+            c.remove();
+          } else {
+            existing[name] = c;
+          }
+        });
+        d.panels.forEach(function(name) {
+          if (!existing[name]) {
+            var card = document.createElement('div');
+            card.className = 'card';
+            card.setAttribute('data-panel', name);
+            var img = document.createElement('img');
+            img.id = 'img-' + name;
+            img.src = '/vis/' + name + '?t=' + Date.now();
+            var lbl = document.createElement('div');
+            lbl.className = 'lbl';
+            lbl.textContent = name;
+            card.appendChild(img);
+            card.appendChild(lbl);
+            grid.appendChild(card);
+          }
+        });
+        // Remove "Waiting…" message if panels exist
+        var wait = grid.querySelector('.wait');
+        if (wait && d.panels.length > 0) wait.remove();
       });
   }, 1000);
 
@@ -169,6 +207,7 @@ class DebuggingNode(DTROS):
         self._latest_velocities = (0.0, 0.0)
         self._latest_state: State = State.DRIVE
         self._state_override: Optional[State] = None
+        self._latest_duckie_centers_world: np.ndarray = np.empty((0, 2))
         self._results_lock = Lock()
         self._process_lock = Lock()
 
@@ -288,9 +327,18 @@ class DebuggingNode(DTROS):
                 self._latest_color_vis = color_vis
                 self._latest_bw_vis = bw_vis
                 self._latest_state = self._pipeline.planner.state
+                dcw = self._pipeline.perception.duckies_bottom_centers_world
+                self._latest_duckie_centers_world = dcw if dcw is not None else np.empty((0, 2))
 
         finally:
             self._pipeline.get_visualizations = self._real_get_visualizations
+
+    @staticmethod
+    def _format_duckie_centers(centers: np.ndarray) -> str:
+        """Format duckie bottom centers (world coords) as a readable string."""
+        if centers is None or centers.size == 0:
+            return "none"
+        return ", ".join(f"({x:.3f}, {y:.3f})" for x, y in centers)
 
     # ======================================================================
     #  Flask routes
@@ -316,12 +364,15 @@ class DebuggingNode(DTROS):
                     panels.append(key)
             if "heatmap" in color_vis and color_vis["heatmap"] is not None:
                 panels.append("heatmap")
+            if "segmentation" in color_vis and color_vis["segmentation"] is not None:
+                panels.append("segmentation")
             for key in ("edge_mask", "white_lane_mask", "yellow_lane_mask"):
                 if key in bw_vis and bw_vis[key] is not None:
                     panels.append(key)
 
             avg_ms = f"{np.mean(times) * 1000:.1f}" if times else "--"
             n = len(times)
+            duckie_str = self._format_duckie_centers(self._latest_duckie_centers_world)
 
             from flask import render_template_string
 
@@ -335,6 +386,7 @@ class DebuggingNode(DTROS):
                 n=n,
                 panels=panels,
                 proc=self._process_enabled,
+                duckie_str=duckie_str,
             )
 
         @app.route("/vis/<name>")
@@ -363,8 +415,24 @@ class DebuggingNode(DTROS):
             with self._results_lock:
                 v, omega = self._latest_velocities
                 times = list(self._process_times)
+                color_vis = dict(self._latest_color_vis)
+                bw_vis = dict(self._latest_bw_vis)
+
+            # Build ordered panel list
+            panels = []
+            for key in ("image", "unwarped_image", "visualization"):
+                if key in color_vis and color_vis[key] is not None:
+                    panels.append(key)
+            if "heatmap" in color_vis and color_vis["heatmap"] is not None:
+                panels.append("heatmap")
+            if "segmentation" in color_vis and color_vis["segmentation"] is not None:
+                panels.append("segmentation")
+            for key in ("edge_mask", "white_lane_mask", "yellow_lane_mask"):
+                if key in bw_vis and bw_vis[key] is not None:
+                    panels.append(key)
 
             avg_ms = f"{np.mean(times) * 1000:.1f}" if times else "--"
+            duckie_str = self._format_duckie_centers(self._latest_duckie_centers_world)
 
             from flask import jsonify
 
@@ -373,6 +441,8 @@ class DebuggingNode(DTROS):
                 omega=f"{omega:.3f}",
                 avg_ms=avg_ms,
                 n=len(times),
+                panels=panels,
+                duckie_str=duckie_str,
             )
 
         @app.route("/state", methods=["POST"])

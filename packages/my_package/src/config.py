@@ -7,9 +7,12 @@ import numpy as np
 VIRTUAL = False
 ENHANCED_LANE_DETECTION = True
 OBJECT_DETECTION = False
+USE_SEGMENTATION = True
 USE_WHEEL_ODOMETRY = True
-USE_TWIST = True
+USE_TWIST = False
 INTERSECTION_DECISIONS = ["straight"] * 5
+
+ORIGINAL_IMAGE_SIZE = (640, 480)  # (width, height)
 
 HZ = 5 if VIRTUAL else 15
 
@@ -31,6 +34,11 @@ INTRINSIC_CALIBRATION_FILE = DATA_DIR / "intrinsic.yaml"
 # OD Model
 OD_MODEL_PATH = DATA_DIR / "od_model.onnx"
 OD_CONF_THRESHOLD = 0.4
+
+# Segmentation Model
+SEG_MODEL_PATH = DATA_DIR / "seg_small_image.onnx"
+MODEL_INPUT_SIZE = (320, 256)  # (width, height)
+SEG_CONF_THRESHOLD = 0.25
 
 # Duckietown constants
 LANE_WIDTH = 0.21  # 21 cm
@@ -109,7 +117,7 @@ if VIRTUAL:
     TURN_SLOWDOWN_GAIN = 0.5  # v = BASE_SPEED * (1 - GAIN * |heading_error|); 0 disables, 1 = full stop at max error
 else:
     MIN_LANE_PIXELS = 100
-    HIDE_TOP_OF_IMAGE = 175
+    HIDE_TOP_OF_IMAGE = 160
     CROSSING_OFFSET_LEFT = np.array([160, -300])
     CROSSING_OFFSET_RIGHT = np.array([150, -140])
     MIN_AREA = 200
@@ -164,7 +172,7 @@ elif not VIRTUAL and not ENHANCED_LANE_DETECTION:
     IMAGE_WIDTH_OFFSET_FACTOR_YELLOW = 0.15
     IMAGE_WIDTH_OFFSET_FACTOR_WHITE = 0.25
 else:
-    BASE_SPEED = 0.1
+    BASE_SPEED = 0.3
     STEERING_GAIN = 0.3
     CROSSING_OFFSET = {
         "left": np.array([40, -230]),
@@ -181,7 +189,7 @@ WHITE_LANE_ONLY_BIGGEST_COMPONENT = False
 N_WAYPOINTS = 6
 SINGLE_LANE_SCALE_FACTOR_WHITE = 0.9
 SINGLE_LANE_SCALE_FACTOR_YELLOW = 0.6
-STOP_MARKER_Y = 350
+STOP_MARKER_Y_RATIO = 0.73
 X_TOLERANCE = 5
 Y_TOLERANCE = 5
 ANGLE_THRESHOLD = 5

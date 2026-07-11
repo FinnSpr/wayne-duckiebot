@@ -77,7 +77,10 @@ class SelfDrivingPipeline:
         self.planner.set_ticks(left_encoder, right_encoder)
         self.planner.duckie_in_roi = self._check_duckie_in_roi()
         self.planner.stop_line_area = np.sum(
-            self.perception.red_mask[config.STOP_MARKER_Y :, :] > 0
+            self.perception.red_mask[
+                int(config.STOP_MARKER_Y_RATIO * self.perception.image_height) :, :
+            ]
+            > 0
         )
         self.planner.update_state()
 
@@ -92,7 +95,9 @@ class SelfDrivingPipeline:
         self.planner.time_last_waypoint = time.time()
         self.planner.blocked_state_last_time = time.time()
 
-        color_vis, bw_vis = self.get_visualizations(image, waypoints)
+        color_vis, bw_vis = self.get_visualizations(
+            self.perception.proc_image, waypoints
+        )
         if config.USE_TWIST:
             return velocities[0], velocities[1], color_vis, bw_vis
         return velocities[0], velocities[1], color_vis, bw_vis
@@ -121,11 +126,13 @@ class SelfDrivingPipeline:
     def _waypoints_duckie_avoid(self) -> Optional[np.ndarray]:
         """Drive waypoints offset sideways away from nearest duckie."""
         waypoints = self._waypoints_drive()
+        if waypoints is None:
+            return None
         target_waypoint = waypoints[0]
         self.avoidance_cost_fn = get_planning_cost_function(
             left_lane_mask=self.perception.left_white_lane,
             right_lane_mask=self.perception.right_white_lane,
-            obstacle_bottom_image_coords=self.perception.detection_bottom_centers,
+            obstacle_bottom_image_coords=self.perception.duckies_bottom_centers,
             goal_position_image_coords=target_waypoint,
             H_image_to_metric=self.perception.H,
             bev_cfg=self.bev_config,
@@ -174,7 +181,7 @@ class SelfDrivingPipeline:
 
     def _check_duckie_in_roi(self) -> bool:
         """Check if any detected duckies are in the ROI."""
-        detections = self.perception.detection_bottom_centers_world
+        detections = self.perception.duckies_bottom_centers_world
         if detections.size == 0:
             return False
         roi = config.AVOIDANCE_START_ABSOLUTE_ROI
@@ -218,6 +225,8 @@ class SelfDrivingPipeline:
             color_vis["heatmap"] = image_utils.get_bev_heatmap_image(
                 self.avoidance_cost_fn, self.bev_config
             )
+        if config.USE_SEGMENTATION and perception.seg_model is not None:
+            color_vis["segmentation"] = perception.seg_model.visualize()
 
         bw_vis: Dict[str, np.ndarray] = {}
         if perception.edge_mask is not None:
