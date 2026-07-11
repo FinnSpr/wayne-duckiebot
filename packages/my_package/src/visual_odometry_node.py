@@ -16,8 +16,15 @@ from visual_odometry import VisualOdometry
 
 ENABLE_VISUAL_MATCHES = True
 
+# when enabled, the node logs and prints the mean of values
+# ideally use it when the robot is stationary
+DEBUG_BIAS_ESTIMATION = False
+ESTIMATION_SAMPLE_SIZE = 1000
+
 
 class VisualOdometryNode(DTROS):
+    STATIONARY_IMAGE_THRESHOLD = 1.2
+
     def __init__(self, node_name):
         super(VisualOdometryNode, self).__init__(
                 node_name=node_name, node_type=NodeType.GENERIC)
@@ -33,19 +40,25 @@ class VisualOdometryNode(DTROS):
         self.l_whl_res, self.r_whl_res = None, None
         self.left_ticks = None
         self.right_ticks = None
+        if DEBUG_BIAS_ESTIMATION:
+            self.left_ticks_list = []
+            self.right_ticks_list = []
 
         # IMU
         self.prev_left_ticks_imu = None
         self.prev_right_ticks_imu = None
         self.prev_left_ticks_vo = None
         self.prev_right_ticks_vo = None
-        self.imu_resps = []  # save response of a standing robot to calibrate gyro bias
+        if DEBUG_BIAS_ESTIMATION:
+            self.imu_resps = []
 
         self.wheel_dist = 0.0   # distance (m) traveled since last VO frame
         self.frame_idx = 0
         self.latest_omega = 0.0
         self.last_predict_time = None
         self.last_vo_time = None  # wall-clock time of last processed image
+
+        self.last_img = None
 
         # Subscribers
         self.camera_info_sub = rospy.Subscriber(
@@ -78,7 +91,7 @@ class VisualOdometryNode(DTROS):
             )
 
         self._last_process_time = rospy.Time(0)
-        hz = 5
+        hz = 25
         self._process_interval = rospy.Duration(1.0 / hz)
 
         self.trajectory_pub = rospy.Publisher(
@@ -96,11 +109,27 @@ class VisualOdometryNode(DTROS):
         if self.l_whl_res is None:
             self.l_whl_res = msg.resolution
         self.left_ticks = msg.data
+        if DEBUG_BIAS_ESTIMATION:
+            self.left_ticks_list.append(msg.data)
+            if len(self.left_ticks_list) >= ESTIMATION_SAMPLE_SIZE:
+                avg_left_ticks = np.mean(self.left_ticks_list)
+                std_left_ticks = np.std(self.left_ticks_list)
+                rospy.loginfo(f"[Left Encoder] Avg({len(self.left_ticks_list)}) samples: "
+                              f"ticks={avg_left_ticks:.4f} +- {std_left_ticks:.4f}")
+                self.left_ticks_list = []
 
     def cb_right_encoder(self, msg):
         if self.r_whl_res is None:
             self.r_whl_res = msg.resolution
         self.right_ticks = msg.data
+        if DEBUG_BIAS_ESTIMATION:
+            self.right_ticks_list.append(msg.data)
+            if len(self.right_ticks_list) >= ESTIMATION_SAMPLE_SIZE:
+                avg_right_ticks = np.mean(self.right_ticks_list)
+                std_right_ticks = np.std(self.right_ticks_list)
+                rospy.loginfo(f"[Right Encoder] Avg({len(self.right_ticks_list)}) samples: "
+                              f"ticks={avg_right_ticks:.4f} +- {std_right_ticks:.4f}")
+                self.right_ticks_list = []
 
     def _compute_velocity(self, dt):
         """Return average linear velocity (m/s) traveled since last call."""
@@ -155,18 +184,19 @@ class VisualOdometryNode(DTROS):
         if self.vo is None:
             return
 
-        self.imu_resps.append((msg.angular_velocity.z,
-                               msg.linear_acceleration.x,
-                               msg.linear_acceleration.y))
-        if len(self.imu_resps) >= 1000:
-            imu_resps = np.array(self.imu_resps)
-            avg_imu_resp = np.mean(imu_resps, axis=0)
-            std_imu_resp = np.std(imu_resps, axis=0)
-            rospy.loginfo(f"[IMU] Avg({len(self.imu_resps)}) samples: "
-                          f"omega.z={avg_imu_resp[0]:.4f} +- {std_imu_resp[0]:.4f}, "
-                          f"accel.x={avg_imu_resp[1]:.4f} +- {std_imu_resp[1]:.4f}, "
-                          f"accel.y={avg_imu_resp[2]:.4f} +- {std_imu_resp[2]:.4f}")
-            self.imu_resps = []
+        if DEBUG_BIAS_ESTIMATION:
+            self.imu_resps.append((msg.angular_velocity.z,
+                                   msg.linear_acceleration.x,
+                                   msg.linear_acceleration.y))
+            if len(self.imu_resps) >= ESTIMATION_SAMPLE_SIZE:
+                imu_resps = np.array(self.imu_resps)
+                avg_imu_resp = np.mean(imu_resps, axis=0)
+                std_imu_resp = np.std(imu_resps, axis=0)
+                rospy.loginfo(f"[IMU] Avg({len(self.imu_resps)}) samples: "
+                              f"omega.z={avg_imu_resp[0]:.4f} +- {std_imu_resp[0]:.4f}, "
+                              f"accel.x={avg_imu_resp[1]:.4f} +- {std_imu_resp[1]:.4f}, "
+                              f"accel.y={avg_imu_resp[2]:.4f} +- {std_imu_resp[2]:.4f}")
+                self.imu_resps = []
 
         now = msg.header.stamp.to_sec()
         self.latest_omega = msg.angular_velocity.z
@@ -226,6 +256,11 @@ class VisualOdometryNode(DTROS):
 
         # Compute distance traveled since last VO frame (used as scale for t)
         wheel_dist = self._compute_wheel_distance()
+        if DEBUG_BIAS_ESTIMATION and wheel_dist is not None:
+            rospy.loginfo_throttle(
+                0.1,
+                f"[VO] Wheel distance since last frame: {wheel_dist:.4f} m"
+            )
         if wheel_dist is None:
             wheel_dist = 0.0
 
@@ -236,6 +271,21 @@ class VisualOdometryNode(DTROS):
         else:
             dt_vo = max(now_sec - self.last_vo_time, 1e-3)
         self.last_vo_time = now_sec
+
+        # log difference in the images to detect if the robot is stationary
+        if self.last_img is not None:
+            diff = cv2.absdiff(current_image, self.last_img)
+            mean_diff = np.mean(diff)
+            if mean_diff < self.STATIONARY_IMAGE_THRESHOLD:
+                rospy.loginfo_throttle(
+                    1.0,
+                    f"[VO] Robot appears stationary (mean image diff: {mean_diff:.4f})"
+                )
+                # update the ekf with zero motion to prevent drift
+                # self.ekf.update_imu(0.0, dt_vo)
+                return
+
+        self.last_img = current_image
 
         # Velocity = distance / dt (wheel encoders are primary source for position)
         v_vo = wheel_dist / dt_vo if dt_vo > 0 else 0.0

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 import os
 import rospy
+import cv2
+from cv_bridge import CvBridge
 from duckietown.dtros import DTROS, NodeType
 from sensor_msgs.msg import CompressedImage, Image, Range, CameraInfo
 from duckietown_msgs.msg import WheelsCmdStamped, WheelEncoderStamped
-from duckietown_msgs.msg import Twist2DStamped, WheelEncoderStamped
-from cv_bridge import CvBridge
+from duckietown_msgs.msg import Twist2DStamped
 
 from process import process_all, get_modes
 from image_utils import load_calibrations, unwarp_image

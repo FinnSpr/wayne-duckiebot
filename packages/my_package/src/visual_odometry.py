@@ -24,20 +24,30 @@ class EKF:
 
     # Maximum angular velocity the robot can achieve (rad/s) plus room for noise.
     # Used to compute per-frame heading change gate: max_delta = MAX_OMEGA * dt.
-    MAX_OMEGA = 20.0  # rad/s — set high enough to accommodate keypoint matching noise during sharp turns
+    MAX_OMEGA = 20.0
+    # Experiment result:
+    # [IMU] Avg(1000) samples: omega.z=-0.0003 +- 0.0000, accel.x=0.0680 +- 0.0375, accel.y=-0.3987 +- 0.0307
+    # [IMU] Avg(1000) samples: omega.z=-0.0003 +- 0.0000, accel.x=0.0675 +- 0.0411, accel.y=-0.3983 +- 0.0299
+    # [IMU] Avg(1000) samples: omega.z=-0.0003 +- 0.0000, accel.x=0.0655 +- 0.0381, accel.y=-0.3968 +- 0.0318
+    IMU_OMEGA_BIAS = -0.0003
+    IMU_ACC_X_BIAS = 0.067
+    IMU_ACC_Y_BIAS = -0.4
 
     def __init__(self):
-        # state vector: [x, y, theta, bias]
-        self.x = np.zeros((4, 1))
+        # state vector: [x, y, theta]
+        self.x = np.zeros((3, 1))
         # state covariance
-        self.P = np.diag([0.1, 0.1, 0.05, 0.01])
+        self.P = np.diag([0.1, 0.1, 0.05])
 
         # process noise: visual odometry prediction
-        self.Q_vo = np.diag([0.02, 0.02, 0.2, 1e-2]) ** 2
-        # process noise: IMU prediction
-        self.Q_imu = np.diag([0.02, 0.02, 0.02, 1e-2]) ** 2
-        # IMU measurement noise (rad/s)
-        self.R_imu = np.array([[0.05]])
+        self.Q_vo = np.diag([0.02, 0.02, 0.2]) ** 2
+
+        # IMU:
+        # average rate: 24.423
+        # process noise
+        self.Q_imu = np.diag([0.02, 0.02, 0.02]) ** 2
+        # measurement noise (rad/s)
+        self.R_imu = np.array([[0.001]])
         # theta value at the start of the last predict step (needed by update_imu)
         self._theta_before_predict = 0.0
 
@@ -68,17 +78,15 @@ class EKF:
         self.x[0, 0] += v * np.cos(theta_mid) * dt
         self.x[1, 0] += v * np.sin(theta_mid) * dt
         self.x[2, 0] = theta_new
-        # bias is a random-walk; no change in predict
 
-        # Jacobian of the motion model w.r.t. [x, y, theta, bias]
-        # Derivative of position update w.r.t. theta uses theta_mid
+        # Jacobian of the motion model w.r.t. [x, y, theta]
         F = np.array([
-            [1, 0, -v * np.sin(theta_mid) * dt, 0],
-            [0, 1,  v * np.cos(theta_mid) * dt, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1]
+            [1, 0, -v * np.sin(theta_mid) * dt],
+            [0, 1,  v * np.cos(theta_mid) * dt],
+            [0, 0, 1],
         ])
-        self.P = F @ self.P @ F.T + self.Q_vo
+        Q_discrete = self.Q_vo * dt
+        self.P = F @ self.P @ F.T + Q_discrete
         self._wrap_theta()
 
     def predict_imu(self, v, omega_meas, dt):
@@ -91,8 +99,7 @@ class EKF:
             dt:         time-step (s)
         """
         theta = self.x[2, 0]
-        bias = self.x[3, 0]
-        omega = omega_meas - bias
+        omega = omega_meas - self.IMU_OMEGA_BIAS
         self._theta_before_predict = theta
 
         self.x[0, 0] += v * np.cos(theta) * dt
@@ -100,10 +107,9 @@ class EKF:
         self.x[2, 0] = wrap_angle(theta + omega * dt)
 
         F = np.array([
-            [1, 0, -v * np.sin(theta) * dt, 0],
-            [0, 1,  v * np.cos(theta) * dt, 0],
-            [0, 0, 1, -dt],
-            [0, 0, 0, 1]
+            [1, 0, -v * np.sin(theta) * dt],
+            [0, 1,  v * np.cos(theta) * dt],
+            [0, 0, 1],
         ])
         self.P = F @ self.P @ F.T + self.Q_imu
         self._wrap_theta()
@@ -126,9 +132,9 @@ class EKF:
             return
 
         delta_theta = wrap_angle(self.x[2, 0] - self._theta_before_predict)
-        omega_predicted = delta_theta / dt + self.x[3, 0]
+        omega_predicted = delta_theta / dt + self.IMU_OMEGA_BIAS
 
-        H = np.array([[0.0, 0.0, 1.0 / dt, 1.0]])
+        H = np.array([[0.0, 0.0, 1.0 / dt]])
         innovation = omega_meas - omega_predicted
 
         S = H @ self.P @ H.T + self.R_imu
@@ -136,7 +142,7 @@ class EKF:
 
         self.x = self.x + K @ np.array([[innovation]])
         self.x[2, 0] = wrap_angle(self.x[2, 0])
-        self.P = (np.eye(4) - K @ H) @ self.P
+        self.P = (np.eye(3) - K @ H) @ self.P
         self._wrap_theta()
 
     def get_state(self):
@@ -212,9 +218,6 @@ class VisualOdometry:
             self.trajectory.append(tuple(self.ekf.get_state()[:3]))
             return False, "First frame: no VO possible"
 
-        # NOTE: EKF predict is now deferred until after VO computation so that
-        # predict_vo() can consume the VO delta_theta directly.
-
         keypoints, descriptors = self._get_kp_desc(image_gray)
         matches = []
         if self.prev_descriptors is not None and descriptors is not None:
@@ -273,7 +276,6 @@ class VisualOdometry:
             # Tilt correction: rotate R by Rx(-tilt) around camera X-axis
             ct = np.cos(self.camera_tilt_rad)
             st = np.sin(self.camera_tilt_rad)
-            # Rotation matrix that un-tilts the camera: Rx(-tilt)
             Rx_inv = np.array([[1,  0,   0],
                                [0,  ct,  st],
                                [0, -st,  ct]])
@@ -282,7 +284,6 @@ class VisualOdometry:
             # Yaw = rotation about the camera Y-axis (pointing down = world-up)
             # For R_level, yaw is atan2(R[2,0], R[0,0])  (ZX plane)
             # equivalently atan2(-R[2,0], R[0,0]) for the standard form;
-            # use the most numerically stable extraction:
             delta_theta_vo = float(np.arctan2(-R_level[2, 0], R_level[0, 0]))
 
             # Debug: print raw rotation components every frame to aid tuning
