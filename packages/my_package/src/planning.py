@@ -56,6 +56,11 @@ class BehaviorPlanner:
         self.left_ticks = 0
         self.right_ticks = 0
 
+        # Global pose for FOLLOW state (updated from ROS topic)
+        self.current_pose = None  # (x, y, theta) latest global pose
+        self.follow_start_pose = None  # (x, y, theta) captured when FOLLOW began
+        self.follow_goal_position = None  # (gx, gy) global goal computed from offsets
+
         self._transitions = [
             Transition(State.DRIVE, State.STOP, condition=self._should_stop),
             Transition(State.DRIVE, State.TURN, condition=self._should_turn),
@@ -63,16 +68,16 @@ class BehaviorPlanner:
             Transition(State.FOLLOW, State.CROSS, condition=self._follow_finished),
             Transition(State.CROSS, State.DRIVE, condition=self._cross_elapsed),
             Transition(State.TURN, State.DRIVE, condition=self._turn_finished),
-            Transition(
-                State.DRIVE,
-                State.WAIT_FOR_INSTRUCTION,
-                condition=self._completed_instructions,
-            ),
-            Transition(
-                State.WAIT_FOR_INSTRUCTION,
-                State.DRIVE,
-                condition=self._has_instructions,
-            ),
+            # Transition(
+            #     State.DRIVE,
+            #     State.WAIT_FOR_INSTRUCTION,
+            #     condition=self._completed_instructions,
+            # ),
+            # Transition(
+            #     State.WAIT_FOR_INSTRUCTION,
+            #     State.DRIVE,
+            #     condition=self._has_instructions,
+            # ),
             # Transition(State.DRIVE, State.DUCKIE_AVOID, condition=self._duckie_in_roi),
             # Transition(
             #     State.DUCKIE_AVOID, State.DRIVE, condition=self._no_duckies_in_roi
@@ -105,6 +110,11 @@ class BehaviorPlanner:
         if new_state == State.FOLLOW:
             self.decision_waypoint = None  # force fresh intersection choice
             self.decision = None
+            self.intersection_speed = None
+            # Capture starting pose for goal computation
+            if self.current_pose is not None:
+                self.follow_start_pose = self.current_pose
+                self.follow_goal_position = None  # computed once decision is known
         print(self.state)
 
     def time_passed(self, duration: float) -> bool:
@@ -146,6 +156,15 @@ class BehaviorPlanner:
     def _follow_finished(self) -> bool:
         if not self.decision:
             return False
+        # New global-pose-based exit condition
+        if config.USE_GLOBAL_POSE_FOLLOW and self.current_pose is not None:
+            if self.follow_goal_position is None:
+                return False
+            cx, cy, _ = self.current_pose
+            gx, gy = self.follow_goal_position
+            dist = np.sqrt((gx - cx) ** 2 + (gy - cy) ** 2)
+            return dist < config.FOLLOW_GOAL_DISTANCE_THRESHOLD
+        # Fallback: wheel odometry
         d = config.FOLLOW_DISTANCE[self.decision]
         t = config.FOLLOW_TIME[self.decision]
         if config.USE_WHEEL_ODOMETRY:
@@ -166,8 +185,38 @@ class BehaviorPlanner:
     def _duckie_in_roi(self) -> bool:
         return self.duckie_in_roi
 
+    def set_current_pose(self, x: float, y: float, theta: float) -> None:
+        """Update the robot's latest global pose (called from ROS callback)."""
+        self.current_pose = (x, y, theta)
+
+    def get_follow_heading_error(self) -> float:
+        """Compute heading error (normalised to [-1, 1]) towards the global goal.
+
+        Returns 0.0 when no pose or goal is available so the robot drives
+        straight while waiting for the global-pose topic.
+        """
+        if self.current_pose is None or self.follow_goal_position is None:
+            return 0.0
+        cx, cy, ctheta = self.current_pose
+        gx, gy = self.follow_goal_position
+        dx = gx - cx
+        dy = gy - cy
+        angle_to_goal = np.arctan2(dy, dx)
+        # Heading error in [-pi, pi]
+        angle_error = np.arctan2(
+            np.sin(angle_to_goal - ctheta),
+            np.cos(angle_to_goal - ctheta),
+        )
+        # Normalise to [-1, 1] matching the image-space convention used by
+        # the drive state, so the same controller gains work.
+        return float(np.clip(angle_error / (np.pi / 2.0), -1.0, 1.0))
+
     def get_intersection_waypoint(self) -> Optional[np.ndarray]:
-        """Get the waypoint for the current intersection decision."""
+        """Get the waypoint for the current intersection decision.
+
+        Also computes the global FOLLOW goal when the decision is first
+        popped (for the global-pose-based FOLLOW mode).
+        """
         if self.decision_waypoint is not None:
             return self.decision_waypoint
 
@@ -177,6 +226,17 @@ class BehaviorPlanner:
 
         self.decision = self._intersection_decisions.popleft()
         self.decision_waypoint = config.CROSSING_OFFSET[self.decision]
+
+        # Compute global goal for FOLLOW (once decision is known)
+        if (
+            config.USE_GLOBAL_POSE_FOLLOW
+            and self.follow_start_pose is not None
+            and self.decision is not None
+        ):
+            x0, y0, _ = self.follow_start_pose
+            dx, dy = config.FOLLOW_GOAL_OFFSETS[self.decision]
+            self.follow_goal_position = (x0 + dx, y0 + dy)
+
         return self.decision_waypoint
 
     def can_intersect(self, image: np.ndarray, red_lines: list) -> bool:

@@ -166,7 +166,8 @@ class SelfDrivingPipeline:
         )
 
     def _speed_follow(self, waypoints: Optional[np.ndarray]) -> Tuple[float, float]:
-        """Intersection handling: wait for admission, then drive."""
+        """Intersection handling: wait for admission, then steer towards the
+        global goal using heading error from the planner."""
         if not self.planner.intersection_admitted:
             red_lines = self.world_model.extract_red_lines(self.perception.red_mask)
             self.planner.intersection_admitted = self.planner.can_intersect(
@@ -175,9 +176,20 @@ class SelfDrivingPipeline:
             if not self.planner.intersection_admitted:
                 self.planner.state_entered_at = time.time()
                 return 0.0, 0.0
-        if self.planner.intersection_speed is None:
-            self.planner.intersection_speed = self._speed_drive(waypoints)
-        return self.planner.intersection_speed
+
+        if config.USE_GLOBAL_POSE_FOLLOW:
+            heading_err = self.planner.get_follow_heading_error()
+        else:
+            # Legacy: heading error from image-space waypoint
+            if waypoints is None:
+                return 0.0, 0.0
+            heading_err = self.controller.estimate_heading_error(
+                waypoints[0], self.perception.image_width, self.perception.image_height
+            )
+
+        if config.USE_TWIST:
+            return self.controller.heading_to_twist(heading_err, False)
+        return self.controller.heading_to_wheel_commands(heading_err, False)
 
     def _check_duckie_in_roi(self) -> bool:
         """Check if any detected duckies are in the ROI."""
