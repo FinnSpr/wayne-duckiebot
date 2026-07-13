@@ -8,9 +8,9 @@ VIRTUAL = False
 ENHANCED_LANE_DETECTION = True
 OBJECT_DETECTION = False
 USE_SEGMENTATION = True
-USE_WHEEL_ODOMETRY = False
+USE_WHEEL_ODOMETRY = True
 USE_TWIST = False
-INTERSECTION_DECISIONS = ["right"]
+INTERSECTION_DECISIONS = ["straight"] * 5
 
 ORIGINAL_IMAGE_SIZE = (640, 480)  # (width, height)
 
@@ -197,16 +197,6 @@ CUT_FRONT_STOP_LINE = 400
 LEFT_VS_RIGHT = 320
 WAIT_UNTIL_TURN_TIME = 3
 PROXIMITY_OTHER_VEHICLES_TO_RED_LINE = 50
-
-USE_GLOBAL_POSE_FOLLOW = True
-GLOBAL_POSE_TOPIC = "ekf_localization/pose"
-FOLLOW_GOAL_OFFSETS = {
-    "left": (-0.50, 0.40),  # forward 0.30 m, left 0.30 m
-    "straight": (0, 0.6),  # forward 0.50 m, no lateral
-    "right": (0.2, -0.25),  # x pos, y neg
-}
-# Distance (m) below which the FOLLOW goal is considered reached.
-FOLLOW_GOAL_DISTANCE_THRESHOLD = 0.05
 
 # Odometry
 WHEEL_RADIUS = 0.0318

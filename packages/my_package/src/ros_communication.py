@@ -6,12 +6,10 @@ import cv2
 import numpy as np
 import ros_utils
 import rospy
-import tf.transformations as tf_trans
 from cv_bridge import CvBridge
 from duckietown.dtros import DTROS, NodeType
 from duckietown_msgs.msg import Twist2DStamped, WheelEncoderStamped, WheelsCmdStamped
 from image_utils import BEVConfig, load_calibrations
-from nav_msgs.msg import Odometry
 from process import SelfDrivingPipeline
 from sensor_msgs.msg import CompressedImage, Image
 
@@ -77,12 +75,6 @@ class ROSCommunication(DTROS):
             WheelEncoderStamped,
             self.cb_right_encoder,
         )
-        if config.USE_GLOBAL_POSE_FOLLOW:
-            rospy.Subscriber(
-                f"/{self._vehicle_name}/{config.GLOBAL_POSE_TOPIC}",
-                Odometry,
-                self.cb_global_pose,
-            )
 
     # --- Callbacks ---
     def cb_camera(self, msg):
@@ -98,18 +90,6 @@ class ROSCommunication(DTROS):
 
     def cb_right_encoder(self, msg):
         self._right_encoder = msg.data
-
-    def cb_global_pose(self, msg: Odometry) -> None:
-        """Callback for the global-pose topic (used by FOLLOW state).
-
-        Extracts (x, y) from the pose and converts the quaternion
-        orientation to a yaw angle before forwarding to the planner.
-        """
-        x = msg.pose.pose.position.x
-        y = msg.pose.pose.position.y
-        q = msg.pose.pose.orientation
-        _, _, yaw = tf_trans.euler_from_quaternion([q.x, q.y, q.z, q.w])
-        self._pipeline.planner.set_current_pose(x, y, yaw)
 
     def _publish_vis(self, vis_name: str, vis_img: np.ndarray, encoding: str) -> None:
         if vis_name not in self._visualization_publishers:
