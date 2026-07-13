@@ -6,10 +6,9 @@ import time
 from typing import Dict, Optional, Tuple
 
 import config
-import cv2
+import image_utils
 import numpy as np
 from control import Controller
-import image_utils
 from obstacle_avoidance import cem_planner, get_planning_cost_function
 
 # from obstacle_avoidance import cem_planner, get_planning_cost_function
@@ -70,7 +69,6 @@ class SelfDrivingPipeline:
         self.perception.perceive(
             image,
             use_enhanced=config.ENHANCED_LANE_DETECTION,
-            world_model=self.world_model,
         )
 
         # State update
@@ -104,20 +102,28 @@ class SelfDrivingPipeline:
 
     def _waypoints_drive(self) -> Optional[np.ndarray]:
         return self.world_model.get_drive_waypoints(
-            self.perception.white_spline,
-            self.perception.yellow_spline,
-            self.perception.image_width,
-            self.perception.image_height,
+            right_white_boundary=self.perception.right_white_boundary,
+            left_white_boundary=self.perception.left_white_boundary,
+            yellow_boundary=self.perception.yellow_boundary,
+            right_white_lane=self.perception.right_white_lane,
+            left_white_lane=self.perception.left_white_lane,
+            yellow_mask=self.perception.yellow_mask,
             red_mask=self.perception.red_mask,
+            H=self.perception.H,
+            image_width=self.perception.image_width,
         )
 
     def _waypoints_cross(self) -> Optional[np.ndarray]:
         return self.world_model.get_drive_waypoints(
-            self.perception.white_spline,
-            self.perception.yellow_spline,
-            self.perception.image_width,
-            self.perception.image_height,
+            right_white_boundary=self.perception.right_white_boundary,
+            left_white_boundary=self.perception.left_white_boundary,
+            yellow_boundary=self.perception.yellow_boundary,
+            right_white_lane=self.perception.right_white_lane,
+            left_white_lane=self.perception.left_white_lane,
+            yellow_mask=self.perception.yellow_mask,
             red_mask=None,
+            H=self.perception.H,
+            image_width=self.perception.image_width,
         )
 
     def _waypoints_follow(self) -> Optional[np.ndarray]:
@@ -199,20 +205,17 @@ class SelfDrivingPipeline:
         if not config.PUBLISH_VISUALIZATIONS and not config.LOCAL_TESTING:
             return {}, {}
         perception = self.perception
-
-        white_combined = np.full(image.shape[:2], 0, dtype=np.uint8)
-        if perception.left_white_lane is not None:
-            white_combined = cv2.bitwise_or(white_combined, perception.left_white_lane)
-        if perception.right_white_lane is not None:
-            white_combined = cv2.bitwise_or(white_combined, perception.right_white_lane)
+        white_spline = self.world_model.last_white_spline
+        if white_spline is None:
+            white_spline = self.world_model.last_left_white_spline
 
         visualization = self.visualizer.visualize(
             perception.proc_image,
-            white_combined,
+            perception.right_white_lane,
             perception.yellow_mask,
             perception.red_mask,
-            perception.white_spline,
-            perception.yellow_spline,
+            self.world_model.last_white_spline,
+            self.world_model.last_yellow_spline,
             waypoints,
         )
 
@@ -232,7 +235,7 @@ class SelfDrivingPipeline:
         if perception.edge_mask is not None:
             bw_vis["edge_mask"] = perception.edge_mask
         if perception.right_white_lane is not None:
-            bw_vis["white_lane_mask"] = white_combined
+            bw_vis["white_lane_mask"] = perception.right_white_lane
         if perception.yellow_mask is not None:
             bw_vis["yellow_lane_mask"] = perception.yellow_mask
 

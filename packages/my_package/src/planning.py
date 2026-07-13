@@ -44,7 +44,7 @@ class BehaviorPlanner:
         self.duckie_in_roi = False
 
         self._intersection_decisions = deque()
-        self._instructions_completed = False
+        self._arrived = False
 
         self.decision_waypoint = None
         self.decision = None
@@ -59,14 +59,16 @@ class BehaviorPlanner:
         self._transitions = [
             Transition(State.DRIVE, State.STOP, condition=self._should_stop),
             Transition(State.DRIVE, State.TURN, condition=self._should_turn),
-            Transition(State.STOP, State.FOLLOW, condition=self._stop_elapsed),
+            Transition(
+                State.STOP, State.FOLLOW, condition=self._stop_elapsed_have_instructions
+            ),
             Transition(State.FOLLOW, State.CROSS, condition=self._follow_finished),
             Transition(State.CROSS, State.DRIVE, condition=self._cross_elapsed),
             Transition(State.TURN, State.DRIVE, condition=self._turn_finished),
             Transition(
                 State.DRIVE,
                 State.WAIT_FOR_INSTRUCTION,
-                condition=self._completed_instructions,
+                condition=self._arrived_at_finish,
             ),
             Transition(
                 State.WAIT_FOR_INSTRUCTION,
@@ -88,6 +90,9 @@ class BehaviorPlanner:
 
     def set_intersection_decisions(self, decisions: list) -> None:
         self._intersection_decisions = deque(decisions)
+
+    def set_arrived(self, arrived: bool) -> None:
+        self._arrived = arrived
 
     def update_state(self):
         """Evaluate FSM transitions — call once per frame after feeding perception inputs."""
@@ -131,8 +136,8 @@ class BehaviorPlanner:
     def _has_instructions(self) -> bool:
         return len(self._intersection_decisions) > 0
 
-    def _completed_instructions(self) -> bool:
-        return self._completed_instructions
+    def _arrived_at_finish(self) -> bool:
+        return self._arrived
 
     def _should_stop(self) -> bool:
         return self.stop_line_area >= config.MIN_AREA
@@ -140,8 +145,8 @@ class BehaviorPlanner:
     def _should_turn(self) -> bool:
         return self.no_waypoint_passed(config.WAIT_UNTIL_TURN_TIME)
 
-    def _stop_elapsed(self) -> bool:
-        return self.time_passed(config.STOP_TIME)
+    def _stop_elapsed_have_instructions(self) -> bool:
+        return self.time_passed(config.STOP_TIME) and self._has_instructions()
 
     def _follow_finished(self) -> bool:
         if not self.decision:

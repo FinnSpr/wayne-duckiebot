@@ -75,8 +75,25 @@ class ROSCommunication(DTROS):
             WheelEncoderStamped,
             self.cb_right_encoder,
         )
+        # rospy.Subscriber(
+        #     f"/{self._vehicle_name}/navigation/turn_queue",
+        #     String,
+        #     self.cb_turn_queue,
+        # )
+        # rospy.Subscriber(
+        #     f"/{self._vehicle_name}/navigation/arrived",
+        #     Bool,
+        #     self.cb_arrived,
+        # )
 
     # --- Callbacks ---
+    def cb_arrived(self, msg):
+        self._pipeline.planner.set_arrived(msg.data)
+
+    def cb_turn_queue(self, msg):
+        decisions = list(msg.data)
+        self._pipeline.planner.set_intersection_decisions(decisions)
+
     def cb_camera(self, msg):
         now = rospy.Time.now()
         if (now - self._last_process_time) < self._process_interval:

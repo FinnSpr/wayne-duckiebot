@@ -1,12 +1,59 @@
-from typing import List
+from typing import List, Optional
 
 import config
 import cv2
-import numpy as np
 import image_utils
+import numpy as np
 from object_detection import ODModel, get_bottom_center_detections, get_negative_mask
 from segmentation import SEGModel
-from world_model import WorldModel
+
+
+def extract_lane_boundary(
+    mask: Optional[np.ndarray],
+    side: str,
+) -> Optional[np.ndarray]:
+    """Extract (col, row) boundary pixels from a binary lane mask.
+
+    For each row that contains lane pixels, keeps only the leftmost or
+    rightmost column, producing a point set that forms a single-valued
+    curve suitable for spline fitting.
+
+    Args:
+        mask:  (H, W) uint8 binary mask (255 = foreground), or None.
+        side:  "left"  -> take minimum column per row;
+               "right" -> take maximum column per row.
+
+    Returns:
+        (N, 2) float64 array [[col, row], ...], or None when
+        the mask is None, has too few pixels, or too few unique rows.
+    """
+    if mask is None:
+        return None
+
+    ys, xs = np.where(mask > 0)
+    if len(xs) < config.MIN_LANE_PIXELS:
+        return None
+
+    # Sort top → bottom
+    sort_idx = np.argsort(ys)
+    xs, ys = xs[sort_idx].astype(np.float64), ys[sort_idx].astype(np.float64)
+
+    take_fn = np.min if side == "left" else np.max
+
+    unique_ys = np.unique(ys)
+    taken_xs = np.array([take_fn(xs[ys == y]) for y in unique_ys])
+
+    pts = np.column_stack([taken_xs, unique_ys])  # (col, row)
+
+    if len(pts) < 4:
+        return None
+
+    # In standard (non-enhanced) mode we aggressively downsample
+    if not config.ENHANCED_LANE_DETECTION:
+        step = max(1, len(pts) // 100)
+        pts = pts[::step]
+
+    return pts
 
 
 class PerceptionModule:
@@ -53,6 +100,11 @@ class PerceptionModule:
         self.duckies_bottom_centers: np.ndarray = None  # (N, 2) bottom-center points
         self.duckies_bottom_centers_world: np.ndarray = None
         self.detections_negative_mask: np.ndarray = None
+        # Boundary point arrays extracted from masks (cached for WorldModel)
+        self.right_white_boundary: Optional[np.ndarray] = None
+        self.left_white_boundary: Optional[np.ndarray] = None
+        self.yellow_boundary: Optional[np.ndarray] = None
+
         self.image_width: int = 0
         self.image_height: int = 0
 
@@ -60,15 +112,13 @@ class PerceptionModule:
         self,
         image: np.ndarray,
         use_enhanced: bool = True,
-        world_model: WorldModel = None,
     ) -> None:
         """Run the full perception pipeline and cache results as member variables.
 
         After calling this, the following attributes are populated:
             proc_image, right_white_lane, left_white_lane, yellow_mask,
             red_mask, edge_mask, white_color, duckie_detections,
-            duckies_bottom_centers, image_width, image_height,
-            white_spline, yellow_spline (when world_model given).
+            duckies_bottom_centers, image_width, image_height.
         """
         if use_enhanced and self.K is not None:
             self.proc_image = image_utils.unwarp_image(image, self.K, self.D, self.P)
@@ -89,17 +139,16 @@ class PerceptionModule:
             self.edge_mask = None
             self.white_color = self.right_white_lane
 
-        # Spline fitting
-        if world_model is not None:
-            self.white_spline = world_model.fit_spline(
-                self.right_white_lane, take_leftmost_pixels=False
-            )
-            self.yellow_spline = world_model.fit_spline(
-                self.yellow_mask, take_leftmost_pixels=True
-            )
-        else:
-            self.white_spline = None
-            self.yellow_spline = None
+        # Extract boundary point sets from the masks (for spline fitting)
+        self.right_white_boundary = extract_lane_boundary(
+            self.right_white_lane, side="right"
+        )
+        self.left_white_boundary = extract_lane_boundary(
+            self.left_white_lane, side="left"
+        )
+        self.yellow_boundary = extract_lane_boundary(
+            self.yellow_mask, side="left"
+        )
 
     def get_raw_lane_colors(self, image: np.ndarray):
         """Returns (white_color, yellow_color, red_color) masks (uint8 0/255).

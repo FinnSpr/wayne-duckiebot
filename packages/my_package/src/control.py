@@ -31,7 +31,7 @@ class Controller:
             return float(np.clip(error_farthest, -1.0, 1.0))
 
     def heading_to_wheel_commands(
-        self, heading_error: float, is_stopped: bool
+        self, heading_error: float, speed: float, is_stopped: bool = False
     ) -> Tuple[float, float]:
         """Convert a heading error to differential wheel commands."""
         if is_stopped:
@@ -42,8 +42,8 @@ class Controller:
             np.clip(correction, -config.MAX_SPEED_DIFF, config.MAX_SPEED_DIFF)
         )
 
-        vel_left = config.BASE_SPEED + correction
-        vel_right = config.BASE_SPEED - correction
+        vel_left = speed + correction
+        vel_right = speed - correction
 
         # Clamp to valid range
         vel_left = float(np.clip(vel_left, -1.0, 1.0))
@@ -51,17 +51,12 @@ class Controller:
 
         return vel_left, vel_right
 
-    def heading_to_twist(self, heading_error, is_stopped):
+    def heading_to_twist(self, heading_error, speed, is_stopped=False):
         if is_stopped:
             self._pid.reset()
             return 0.0, 0.0
 
         omega = self._pid.update(heading_error)
         omega = float(np.clip(omega, -config.MAX_OMEGA, config.MAX_OMEGA))
-        # v = float(config.BASE_SPEED)
-        v = config.BASE_SPEED
-        if getattr(config, "SLOW_DOWN_ON_TURN", False):
-            v *= max(0.0, 1.0 - config.TURN_SLOWDOWN_GAIN * abs(heading_error))
-        v = float(np.clip(v, 0.0, config.BASE_SPEED))
 
-        return (v, omega)
+        return (speed, omega)

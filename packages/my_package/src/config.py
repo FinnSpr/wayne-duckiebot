@@ -41,7 +41,7 @@ MODEL_INPUT_SIZE = (320, 256)  # (width, height)
 SEG_CONF_THRESHOLD = 0.25
 
 # Duckietown constants
-LANE_WIDTH = 0.21  # 21 cm
+LANE_WIDTH = 0.28  # 28 cm
 TILE_WIDTH = 0.61  # 61 cm
 DUCKIE_RADIUS = 0.025  # 2.5 cm
 BOT_WIDTH = 0.1  # 10 cm
@@ -113,8 +113,6 @@ if VIRTUAL:
     MAX_OMEGA = 3.0
     INTEGRAL_LIMIT = 1.0  # anti-windup clamp on the PID's integral term — tune to taste
     PID_MAX_DT = 0.5  # caps a single update's dt so a stale timestamp (after TURN/STOP) can't spike the integral
-    SLOW_DOWN_ON_TURN = True
-    TURN_SLOWDOWN_GAIN = 0.5  # v = BASE_SPEED * (1 - GAIN * |heading_error|); 0 disables, 1 = full stop at max error
 else:
     MIN_LANE_PIXELS = 100
     HIDE_TOP_OF_IMAGE = 160
@@ -153,8 +151,6 @@ else:
     MAX_OMEGA = 3.0
     INTEGRAL_LIMIT = 1.0
     PID_MAX_DT = 0.5
-    # SLOW_DOWN_ON_TURN = False
-    # TURN_SLOWDOWN_GAIN = 0.5
 
 CROSSING_OFFSET_TOP = np.array([110, 0])
 
@@ -187,8 +183,6 @@ else:
 MAX_SPEED_DIFF = 0.2
 WHITE_LANE_MIN_AREA = 30
 N_WAYPOINTS = 6
-SINGLE_LANE_SCALE_FACTOR_WHITE = 0.9
-SINGLE_LANE_SCALE_FACTOR_YELLOW = 0.6
 STOP_MARKER_Y_RATIO = 0.73
 X_TOLERANCE = 5
 Y_TOLERANCE = 5
@@ -197,6 +191,12 @@ CUT_FRONT_STOP_LINE = 400
 LEFT_VS_RIGHT = 320
 WAIT_UNTIL_TURN_TIME = 3
 PROXIMITY_OTHER_VEHICLES_TO_RED_LINE = 50
+SINGLE_SPLINE_N_WAYPOINTS = 15  # because derivatives need more points
+SINGLE_SPLINE_OFFSET_WORLD = {
+    "right_white": LANE_WIDTH / 2,
+    "yellow": -LANE_WIDTH / 2,
+    "left_white": -3 * LANE_WIDTH / 2,
+}
 
 # Odometry
 WHEEL_RADIUS = 0.0318
