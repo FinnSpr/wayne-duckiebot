@@ -60,3 +60,8 @@ a launcher will be created for it. For example, the script file
 
 When launching a new container, you can simply provide `dt-launcher-my-launcher` as
 command.
+
+Khizir network hacks:
+echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+sudo ip route del default via 192.168.0.1 dev wlan0
+sudo ip route add default via 192.168.0.250 dev wlan0
