@@ -52,7 +52,7 @@ def _build_composite_frame(
             all_imgs.append((name, color_vis[name]))
 
     # greyscale / false-colour windows
-    for name in ("edge_mask", "white_lane_mask", "cost_heatmap", "bev_mask"):
+    for name in ("edge_mask", "white_lane_mask", "heatmap", "bev_mask"):
         if name in bw_vis and bw_vis[name] is not None:
             img = bw_vis[name]
             if len(img.shape) == 2 or img.shape[2] == 1:

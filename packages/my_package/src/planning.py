@@ -75,10 +75,10 @@ class BehaviorPlanner:
                 State.DRIVE,
                 condition=self._has_instructions,
             ),
-            # Transition(State.DRIVE, State.DUCKIE_AVOID, condition=self._duckie_in_roi),
-            # Transition(
-            #     State.DUCKIE_AVOID, State.DRIVE, condition=self._no_duckies_in_roi
-            # ),
+            Transition(State.DRIVE, State.DUCKIE_AVOID, condition=self._duckie_in_roi),
+            Transition(
+                State.DUCKIE_AVOID, State.DRIVE, condition=self._no_duckies_in_roi
+            ),
         ]
 
     def construct_timers_if_needed(self):

@@ -25,9 +25,6 @@ class WorldModel:
         right_white_boundary: Optional[np.ndarray],
         left_white_boundary: Optional[np.ndarray],
         yellow_boundary: Optional[np.ndarray],
-        right_white_lane: Optional[np.ndarray],
-        left_white_lane: Optional[np.ndarray],
-        yellow_mask: Optional[np.ndarray],
         red_mask: Optional[np.ndarray],
         H: np.ndarray,
         image_width: int,
@@ -35,8 +32,7 @@ class WorldModel:
         """Compute lane-following waypoints for normal driving.
 
         Takes pre-extracted boundary point sets for image-space spline
-        fitting, and raw masks for the single-lane world-coordinate
-        fallback.  Returns waypoints in image pixel coordinates.
+        fitting.  Returns waypoints in image pixel coordinates.
 
         If red_mask is provided (not None), waypoints will point at the
         nearest horizontal red stop line instead of following the lane centre.
@@ -65,7 +61,7 @@ class WorldModel:
                     return np.array([[current_line[0], current_line[1]]])
 
         # Right white + yellow lane boundaries visible
-        if right_white_lane is not None and yellow_mask is not None:
+        if right_white_boundary is not None and yellow_boundary is not None:
             tck_white = self.fit_spline(
                 right_white_boundary, sort_by="y", collapse_fn=np.min, smoothing=50000.0
             )
@@ -89,13 +85,15 @@ class WorldModel:
                     return np.column_stack([center_x, center_y])
 
         # Only one lane boundary visible
-        for mask, lane_key in [
-            (right_white_lane, "right_white"),
-            (yellow_mask, "yellow"),
-            (left_white_lane, "left_white"),
+        for boundary, lane_key in [
+            (right_white_boundary, "right_white"),
+            (yellow_boundary, "yellow"),
+            (left_white_boundary, "left_white"),
         ]:
-            if mask is not None:
-                waypoints = self._project_single_spline_from_mask(mask, H, lane_key)
+            if boundary is not None:
+                waypoints = self._project_single_spline_from_boundary(
+                    boundary, H, lane_key
+                )
                 if waypoints is not None:
                     return waypoints
 
@@ -163,20 +161,19 @@ class WorldModel:
         else:
             xs, ys = dep, indep
 
-        # --- fit ---
         try:
             tck, _ = splprep([xs, ys], s=smoothing, k=3)
             return tck
         except Exception:
             return None
 
-    def _project_single_spline_from_mask(
+    def _project_single_spline_from_boundary(
         self,
-        mask: np.ndarray,
+        boundary: np.ndarray,
         H: np.ndarray,
         lane_key: str,
     ) -> Optional[np.ndarray]:
-        """Fit a spline on a single lane mask in **world** coordinates,
+        """Fit a spline on a single lane boundary in **world** coordinates,
         offset it toward the lane centre, and project back to image coords.
 
         The un-offset world spline is also projected back to image space
@@ -184,7 +181,7 @@ class WorldModel:
         visualiser can show it.
 
         Args:
-            mask:     Binary lane mask (H_img, W_img).
+            boundary: (N, 2) array of boundary points in image pixel coords.
             H:        3x3 homography  image pixels -> world (x_fwd, y_lat).
             lane_key: "right_white" | "yellow" | "left_white".
 
@@ -193,28 +190,20 @@ class WorldModel:
         """
         offset_world = config.SINGLE_SPLINE_OFFSET_WORLD[lane_key]
 
-        # Mask -> image points
-        ys, xs = np.where(mask > 0)
-        if len(xs) < config.MIN_LANE_PIXELS:
+        if len(boundary) < config.MIN_LANE_BOUNDARY_POINTS:
             return None
 
-        img_pts = np.column_stack([xs, ys]).astype(np.float64)
+        img_pts = boundary.astype(np.float64)
         world_pts = image_utils.image_to_world_coords(img_pts, H)
 
-        # Keep only forward points
-        forward_mask = world_pts[:, 0] > 0.0
-        world_pts = world_pts[forward_mask]
-        if len(world_pts) < 4:
-            return None
-
-        # 2. Fit spline in world coordinates
+        # Fit spline in world coordinates
         tck = self.fit_spline(
             world_pts, sort_by="x", collapse_fn=np.median, smoothing=400
         )
         if tck is None:
             return None
 
-        # 3. Sample the world spline & project to image for visualisation
+        # Sample the world spline & project to image for visualisation
         sx, sy = _sample_spline(tck)
         world_spline_pts = np.column_stack([sx, sy])
         img_spline_pts = image_utils.world_to_image_coords(world_spline_pts, H)
@@ -248,7 +237,7 @@ class WorldModel:
         world_waypoints = np.column_stack([offset_x, offset_y])
         image_waypoints = image_utils.world_to_image_coords(world_waypoints, H)
 
-        return image_waypoints
+        return image_waypoints[::-1]  # Reverse order (farthest first)
 
     def extract_red_lines(
         self, red_mask: np.ndarray

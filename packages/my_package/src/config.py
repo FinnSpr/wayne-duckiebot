@@ -8,8 +8,9 @@ VIRTUAL = False
 ENHANCED_LANE_DETECTION = True
 OBJECT_DETECTION = False
 USE_SEGMENTATION = True
+SEGMENTATION_EDGE_DETECTION = True
 USE_WHEEL_ODOMETRY = True
-USE_TWIST = False
+USE_TWIST = True
 INTERSECTION_DECISIONS = ["straight"] * 5
 
 ORIGINAL_IMAGE_SIZE = (640, 480)  # (width, height)
@@ -74,7 +75,7 @@ BEV_RESOLUTION = 0.001  # 0.1 cm per pixel
 
 # Hyperparameters dependent on VIRTUAL
 if VIRTUAL:
-    MIN_LANE_PIXELS = 30
+    MIN_LANE_BOUNDARY_POINTS = 30
     HIDE_TOP_OF_IMAGE = 250
     CROSSING_OFFSET_LEFT = np.array([160, -350])
     CROSSING_OFFSET_RIGHT = np.array([200, -140])
@@ -107,14 +108,14 @@ if VIRTUAL:
     TURN_OMEGA = 1.5
 
     # PID VALUES:
-    KP = 1.6
+    KP = 1.2
     KI = 0.0
     KD = 0.0
-    MAX_OMEGA = 3.0
+    MAX_OMEGA = 2.0
     INTEGRAL_LIMIT = 1.0  # anti-windup clamp on the PID's integral term — tune to taste
     PID_MAX_DT = 0.5  # caps a single update's dt so a stale timestamp (after TURN/STOP) can't spike the integral
 else:
-    MIN_LANE_PIXELS = 100
+    MIN_LANE_BOUNDARY_POINTS = 30
     HIDE_TOP_OF_IMAGE = 160
     CROSSING_OFFSET_LEFT = np.array([160, -300])
     CROSSING_OFFSET_RIGHT = np.array([150, -140])
@@ -168,8 +169,8 @@ elif not VIRTUAL and not ENHANCED_LANE_DETECTION:
     IMAGE_WIDTH_OFFSET_FACTOR_YELLOW = 0.15
     IMAGE_WIDTH_OFFSET_FACTOR_WHITE = 0.25
 else:
-    BASE_SPEED = 0.3
-    STEERING_GAIN = 0.3
+    BASE_SPEED = 0.2
+    STEERING_GAIN = 0.2
     CROSSING_OFFSET = {
         "left": np.array([40, -230]),
         "straight": np.array([100, 0]),

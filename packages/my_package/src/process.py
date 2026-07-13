@@ -105,9 +105,6 @@ class SelfDrivingPipeline:
             right_white_boundary=self.perception.right_white_boundary,
             left_white_boundary=self.perception.left_white_boundary,
             yellow_boundary=self.perception.yellow_boundary,
-            right_white_lane=self.perception.right_white_lane,
-            left_white_lane=self.perception.left_white_lane,
-            yellow_mask=self.perception.yellow_mask,
             red_mask=self.perception.red_mask,
             H=self.perception.H,
             image_width=self.perception.image_width,
@@ -118,9 +115,6 @@ class SelfDrivingPipeline:
             right_white_boundary=self.perception.right_white_boundary,
             left_white_boundary=self.perception.left_white_boundary,
             yellow_boundary=self.perception.yellow_boundary,
-            right_white_lane=self.perception.right_white_lane,
-            left_white_lane=self.perception.left_white_lane,
-            yellow_mask=self.perception.yellow_mask,
             red_mask=None,
             H=self.perception.H,
             image_width=self.perception.image_width,
@@ -157,8 +151,12 @@ class SelfDrivingPipeline:
             waypoints[0], self.perception.image_width, self.perception.image_height
         )
         if config.USE_TWIST:
-            return self.controller.heading_to_twist(heading_err, False)
-        return self.controller.heading_to_wheel_commands(heading_err, False)
+            return self.controller.heading_to_twist(
+                heading_err, config.BASE_SPEED, False
+            )
+        return self.controller.heading_to_wheel_commands(
+            heading_err, config.BASE_SPEED, False
+        )
 
     def _speed_stop(self, waypoints: Optional[np.ndarray]) -> Tuple[float, float]:
         return 0.0, 0.0

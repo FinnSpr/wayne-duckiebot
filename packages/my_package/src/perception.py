@@ -31,7 +31,7 @@ def extract_lane_boundary(
         return None
 
     ys, xs = np.where(mask > 0)
-    if len(xs) < config.MIN_LANE_PIXELS:
+    if len(xs) < config.MIN_LANE_BOUNDARY_POINTS:
         return None
 
     # Sort top → bottom
@@ -130,9 +130,7 @@ class PerceptionModule:
         self._detect_objects(self.proc_image)
 
         if use_enhanced:
-            self.filter_lane_colors_enhanced(
-                self.proc_image, self.detections_negative_mask
-            )
+            self.filter_lane_colors_enhanced(self.proc_image)
         else:
             self.filter_lane_colors_standard(self.proc_image)
             self.left_white_lane = None
@@ -146,9 +144,7 @@ class PerceptionModule:
         self.left_white_boundary = extract_lane_boundary(
             self.left_white_lane, side="left"
         )
-        self.yellow_boundary = extract_lane_boundary(
-            self.yellow_mask, side="left"
-        )
+        self.yellow_boundary = extract_lane_boundary(self.yellow_mask, side="left")
 
     def get_raw_lane_colors(self, image: np.ndarray):
         """Returns (white_color, yellow_color, red_color) masks (uint8 0/255).
@@ -207,12 +203,17 @@ class PerceptionModule:
             self.duckies_bottom_centers, self.H
         )
 
-    def filter_lane_colors_enhanced(
-        self, image: np.ndarray, obstacle_negative_mask: np.ndarray = None
-    ) -> None:
+    def filter_lane_colors_enhanced(self, image: np.ndarray) -> None:
         """Enhanced lane filtering using Sobel edge magnitudes and HSV color masks.
         Saves results directly to self."""
         blurred = cv2.GaussianBlur(image, (0, 0), sigmaX=config.SIGMA)
+
+        white_color, yellow_color, red_color = self.get_raw_lane_colors(blurred)
+        if config.USE_SEGMENTATION and config.SEGMENTATION_EDGE_DETECTION:
+            blurred = self._segmentation_to_blurred(
+                white_color, yellow_color, red_color
+            )
+
         gray = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
         sobel_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
         sobel_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
@@ -222,12 +223,6 @@ class PerceptionModule:
         mask_sobelx_pos = ((sobel_x > 0).astype(np.uint8)) * 255
         mask_sobelx_neg = ((sobel_x < 0).astype(np.uint8)) * 255
         mask_sobely_pos = ((sobel_y > 0).astype(np.uint8)) * 255
-
-        white_color, yellow_color, red_color = self.get_raw_lane_colors(blurred)
-
-        if obstacle_negative_mask is not None and not config.USE_SEGMENTATION:
-            yellow_color = cv2.bitwise_and(yellow_color, obstacle_negative_mask)
-            red_color = cv2.bitwise_and(red_color, obstacle_negative_mask)
 
         if config.VIRTUAL:
             hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
@@ -260,9 +255,6 @@ class PerceptionModule:
             self.yellow_mask, cv2.bitwise_and(mask_sobelx_pos, mask_sobely_pos)
         )
 
-        self.right_white_lane = self._ensure_min_pixels(self.right_white_lane)
-        self.left_white_lane = self._ensure_min_pixels(self.left_white_lane)
-        self.yellow_mask = self._ensure_min_pixels(self.yellow_mask)
         self.red_mask = red_color
         self.edge_mask = edge_mask
         self.white_color = white_color
@@ -298,12 +290,6 @@ class PerceptionModule:
             if mask is not None:
                 mask[:roi, :] = 0
 
-    def _ensure_min_pixels(self, mask: np.ndarray) -> np.ndarray:
-        """Ensure that the mask has at least min_pixels non-zero pixels."""
-        if np.count_nonzero(mask) < config.MIN_LANE_PIXELS:
-            return None
-        return mask
-
     def filter_components_over_threshold(
         self, mask: np.ndarray, min_area: float = config.WHITE_LANE_MIN_AREA
     ) -> np.ndarray:
@@ -322,3 +308,36 @@ class PerceptionModule:
             if stats[i, cv2.CC_STAT_AREA] >= min_area:
                 filtered[labels == i] = 255
         return filtered
+
+    def _segmentation_to_blurred(
+        self,
+        white_color: np.ndarray,
+        yellow_color: np.ndarray,
+        red_color: np.ndarray,
+    ) -> np.ndarray:
+        """Construct a blurred BGR image from segmentation color masks.
+
+        Maps white → white (255,255,255), yellow → yellow (0,255,255),
+        red → red (0,0,255) in BGR space, then applies Gaussian blur.
+
+        Args:
+            white_color: (H, W) uint8 binary mask for white lane.
+            yellow_color: (H, W) uint8 binary mask for yellow lane.
+            red_color: (H, W) uint8 binary mask for red stop line.
+
+        Returns:
+            (H, W, 3) uint8 BGR image after Gaussian blur.
+        """
+        h, w = white_color.shape
+        constructed = np.zeros((h, w, 3), dtype=np.uint8)
+
+        white_mask = white_color > 0
+        yellow_mask = yellow_color > 0
+        red_mask = red_color > 0
+
+        constructed[white_mask] = (255, 255, 255)  # BGR white
+        constructed[yellow_mask] = (0, 255, 255)  # BGR yellow
+        constructed[red_mask] = (0, 0, 255)  # BGR red
+
+        blurred = cv2.GaussianBlur(constructed, (0, 0), sigmaX=config.SIGMA)
+        return blurred
