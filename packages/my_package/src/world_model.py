@@ -51,14 +51,7 @@ class WorldModel:
         if red_mask is not None and np.any(red_mask > 0):
             red_lines = self.extract_red_lines(red_mask)
             if red_lines:
-                horiz = [l for l in red_lines if l[2] == "horizontal"]
-                if horiz:
-                    current_line = max(
-                        horiz,
-                        key=lambda l: l[1],
-                        default=(int(image_width / 2), 0),
-                    )
-                    return np.array([[current_line[0], current_line[1]]])
+                return np.array([[red_lines[0][0], red_lines[0][1]]])
 
         # Right white + yellow lane boundaries visible
         if right_white_boundary is not None and yellow_boundary is not None:
@@ -245,8 +238,8 @@ class WorldModel:
         """
         Detects red stop lines in a binary mask, fits bounding boxes,
         and returns list of lines with format: (cx, cy, orientation, angle).
+        They are sorted by vertical position (cy) in descending order.
         """
-        # TODO: This is so bad
         if np.all(red_mask == 0):
             return []
 
@@ -256,7 +249,7 @@ class WorldModel:
         lines = []
         for label in range(1, num_labels):
             area = stats[label, cv2.CC_STAT_AREA]
-            if area < config.MIN_AREA:
+            if area < config.MIN_AREA_STOP_LINE:
                 continue
 
             component_pixels = np.column_stack(np.where(labels == label))
@@ -272,8 +265,8 @@ class WorldModel:
             cy = int(centroids[label][1])
             lines.append((cx, cy, orientation, angle, area))
 
-        # Keep only the five largest horizontal/vertical markings
-        lines = sorted(lines, key=lambda l: l[3], reverse=True)[:5]
+        # Sort by angle
+        lines = sorted(lines, key=lambda l: l[1], reverse=True)
         # Format as: (cx, cy, orientation, angle)
         return [(l[0], l[1], l[2], l[3]) for l in lines]
 

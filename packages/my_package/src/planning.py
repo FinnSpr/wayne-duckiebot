@@ -6,6 +6,7 @@ from typing import Callable, Optional
 
 import config
 import cv2
+import image_utils
 import numpy as np
 
 
@@ -34,7 +35,7 @@ class BehaviorPlanner:
     """
 
     def __init__(self):
-        self.state = State.DRIVE
+        self.state = State.WAIT_FOR_INSTRUCTION
         self.state_entered_at = None
         self.time_last_waypoint = None
         self.prev_state = State.DRIVE
@@ -46,7 +47,7 @@ class BehaviorPlanner:
         self._intersection_decisions = deque()
         self._arrived = False
 
-        self.decision_waypoint = None
+        self.decision_waypoint_world = None
         self.decision = None
         self.intersection_admitted = False
         self.intersection_speed = None
@@ -58,7 +59,7 @@ class BehaviorPlanner:
 
         self._transitions = [
             Transition(State.DRIVE, State.STOP, condition=self._should_stop),
-            Transition(State.DRIVE, State.TURN, condition=self._should_turn),
+            # Transition(State.DRIVE, State.TURN, condition=self._should_turn),
             Transition(
                 State.STOP, State.FOLLOW, condition=self._stop_elapsed_have_instructions
             ),
@@ -76,9 +77,9 @@ class BehaviorPlanner:
                 condition=self._has_instructions,
             ),
             Transition(State.DRIVE, State.DUCKIE_AVOID, condition=self._duckie_in_roi),
-            Transition(
-                State.DUCKIE_AVOID, State.DRIVE, condition=self._no_duckies_in_roi
-            ),
+            # Transition(
+            #     State.DUCKIE_AVOID, State.DRIVE, condition=self._no_duckies_in_roi
+            # ),
         ]
 
     def construct_timers_if_needed(self):
@@ -108,8 +109,11 @@ class BehaviorPlanner:
         self.state_entered_at = time.time()
         self.intersection_admitted = False
         if new_state == State.FOLLOW:
-            self.decision_waypoint = None  # force fresh intersection choice
+            self.decision_waypoint_world = None  # force fresh intersection choice
             self.decision = None
+            self.intersection_speed = None
+        if new_state == State.WAIT_FOR_INSTRUCTION:
+            self._arrived = False
         print(self.state)
 
     def time_passed(self, duration: float) -> bool:
@@ -140,7 +144,7 @@ class BehaviorPlanner:
         return self._arrived
 
     def _should_stop(self) -> bool:
-        return self.stop_line_area >= config.MIN_AREA
+        return self.stop_line_area >= config.MIN_AREA_STOP_LINE
 
     def _should_turn(self) -> bool:
         return self.no_waypoint_passed(config.WAIT_UNTIL_TURN_TIME)
@@ -171,22 +175,21 @@ class BehaviorPlanner:
     def _duckie_in_roi(self) -> bool:
         return self.duckie_in_roi
 
-    def get_intersection_waypoint(self) -> Optional[np.ndarray]:
+    def get_intersection_waypoint_world(self) -> Optional[np.ndarray]:
         """Get the waypoint for the current intersection decision."""
-        if self.decision_waypoint is not None:
-            return self.decision_waypoint
+        if self.decision_waypoint_world is not None:
+            return self.decision_waypoint_world
 
         if not self._intersection_decisions:
             print("No more intersection decisions available.")
             return None
 
         self.decision = self._intersection_decisions.popleft()
-        self.decision_waypoint = config.CROSSING_OFFSET[self.decision]
-        return self.decision_waypoint
+        self.decision_waypoint_world = config.CROSSING_OFFSET[self.decision]
+        return self.decision_waypoint_world
 
     def can_intersect(self, image: np.ndarray, red_lines: list) -> bool:
         """Determine whether the robot can proceed at the intersection (traffic rules/checks)."""
-        # TODO: better logic, not just blue color
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, config.BLUE_HSV_LOWER, config.BLUE_HSV_UPPER)
         h, w = mask.shape

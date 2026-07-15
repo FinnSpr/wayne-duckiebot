@@ -3,4 +3,5 @@
 numpy
 scikit-learn
 pillow
-onnxruntime
+onnxruntime-gpu
+flask

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
+import json
 import os
 
 import config
-import cv2
 import numpy as np
 import ros_utils
 import rospy
@@ -12,6 +12,7 @@ from duckietown_msgs.msg import Twist2DStamped, WheelEncoderStamped, WheelsCmdSt
 from image_utils import BEVConfig, load_calibrations
 from process import SelfDrivingPipeline
 from sensor_msgs.msg import CompressedImage, Image
+from std_msgs.msg import Bool, String
 
 
 class ROSCommunication(DTROS):
@@ -57,7 +58,7 @@ class ROSCommunication(DTROS):
         self._pipeline = SelfDrivingPipeline(
             self._K, self._D, self._P, self._H, self.bev_cfg
         )
-        self._pipeline.planner.set_intersection_decisions(config.INTERSECTION_DECISIONS)
+        # self._pipeline.planner.set_intersection_decisions(config.INTERSECTION_DECISIONS)
 
         # Subscribers
         rospy.Subscriber(
@@ -75,23 +76,23 @@ class ROSCommunication(DTROS):
             WheelEncoderStamped,
             self.cb_right_encoder,
         )
-        # rospy.Subscriber(
-        #     f"/{self._vehicle_name}/navigation/turn_queue",
-        #     String,
-        #     self.cb_turn_queue,
-        # )
-        # rospy.Subscriber(
-        #     f"/{self._vehicle_name}/navigation/arrived",
-        #     Bool,
-        #     self.cb_arrived,
-        # )
+        rospy.Subscriber(
+            f"/{self._vehicle_name}/navigation/turn_queue",
+            String,
+            self.cb_turn_queue,
+        )
+        rospy.Subscriber(
+            f"/{self._vehicle_name}/navigation/arrived",
+            Bool,
+            self.cb_arrived,
+        )
 
     # --- Callbacks ---
     def cb_arrived(self, msg):
         self._pipeline.planner.set_arrived(msg.data)
 
     def cb_turn_queue(self, msg):
-        decisions = list(msg.data)
+        decisions = list(json.loads(msg.data))
         self._pipeline.planner.set_intersection_decisions(decisions)
 
     def cb_camera(self, msg):

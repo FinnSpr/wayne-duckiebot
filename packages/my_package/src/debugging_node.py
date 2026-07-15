@@ -75,6 +75,9 @@ _PAGE = r"""<!DOCTYPE html>
 <div class="bar" id="duckie-bar">
   <span class="stat">Duckie bottom centers (world, m): {{ duckie_str }}</span>
 </div>
+<div class="bar" id="red-lines-bar">
+  <span class="stat">Red stop lines: {{ red_lines_str }}</span>
+</div>
 <div class="grid" id="grid">
   {% if panels %}
   {% for p in panels %}
@@ -107,6 +110,10 @@ _PAGE = r"""<!DOCTYPE html>
         var duckieBar = document.getElementById('duckie-bar');
         if (duckieBar) {
           duckieBar.innerHTML = '<span class="stat">Duckie bottom centers (world, m): ' + (d.duckie_str || 'none') + '</span>';
+        }
+        var redLinesBar = document.getElementById('red-lines-bar');
+        if (redLinesBar) {
+          redLinesBar.innerHTML = '<span class="stat">Red stop lines: ' + (d.red_lines_str || 'none') + '</span>';
         }
         // Update panels dynamically
         var grid = document.getElementById('grid');
@@ -208,6 +215,7 @@ class DebuggingNode(DTROS):
         self._latest_state: State = State.DRIVE
         self._state_override: Optional[State] = None
         self._latest_duckie_centers_world: np.ndarray = np.empty((0, 2))
+        self._latest_red_lines = []  # List of (cx, cy, orientation, angle)
         self._results_lock = Lock()
         self._process_lock = Lock()
 
@@ -329,6 +337,11 @@ class DebuggingNode(DTROS):
                 self._latest_state = self._pipeline.planner.state
                 dcw = self._pipeline.perception.duckies_bottom_centers_world
                 self._latest_duckie_centers_world = dcw if dcw is not None else np.empty((0, 2))
+                red_mask = self._pipeline.perception.red_mask
+                if red_mask is not None:
+                    self._latest_red_lines = self._pipeline.world_model.extract_red_lines(red_mask)
+                else:
+                    self._latest_red_lines = []
 
         finally:
             self._pipeline.get_visualizations = self._real_get_visualizations
@@ -339,6 +352,16 @@ class DebuggingNode(DTROS):
         if centers is None or centers.size == 0:
             return "none"
         return ", ".join(f"({x:.3f}, {y:.3f})" for x, y in centers)
+
+    @staticmethod
+    def _format_red_lines(lines) -> str:
+        """Format red stop lines as a readable string."""
+        if not lines:
+            return "none"
+        parts = []
+        for cx, cy, orientation, angle in lines:
+            parts.append(f"({cx}, {cy}) {orientation} ∠{angle:.1f}°")
+        return "; ".join(parts)
 
     # ======================================================================
     #  Flask routes
@@ -373,6 +396,7 @@ class DebuggingNode(DTROS):
             avg_ms = f"{np.mean(times) * 1000:.1f}" if times else "--"
             n = len(times)
             duckie_str = self._format_duckie_centers(self._latest_duckie_centers_world)
+            red_lines_str = self._format_red_lines(self._latest_red_lines)
 
             from flask import render_template_string
 
@@ -387,6 +411,7 @@ class DebuggingNode(DTROS):
                 panels=panels,
                 proc=self._process_enabled,
                 duckie_str=duckie_str,
+                red_lines_str=red_lines_str,
             )
 
         @app.route("/vis/<name>")
@@ -433,6 +458,7 @@ class DebuggingNode(DTROS):
 
             avg_ms = f"{np.mean(times) * 1000:.1f}" if times else "--"
             duckie_str = self._format_duckie_centers(self._latest_duckie_centers_world)
+            red_lines_str = self._format_red_lines(self._latest_red_lines)
 
             from flask import jsonify
 
@@ -443,6 +469,7 @@ class DebuggingNode(DTROS):
                 n=len(times),
                 panels=panels,
                 duckie_str=duckie_str,
+                red_lines_str=red_lines_str,
             )
 
         @app.route("/state", methods=["POST"])

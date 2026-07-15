@@ -14,6 +14,9 @@ class Controller:
     def __init__(self):
         self._pid = PID(config.KP, config.KI, config.KD)
 
+    def reset(self):
+        self._pid.reset()
+
     def estimate_heading_error(
         self, waypoint: np.ndarray, image_width: int, image_height: int
     ) -> float:

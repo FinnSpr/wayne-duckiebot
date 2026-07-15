@@ -29,6 +29,7 @@ class SelfDrivingPipeline:
     ):
         self.bev_config = bev_config
         self.avoidance_cost_fn = None
+        self.last_avoidance_actions = None
 
         self.perception = PerceptionModule(
             K=K, D=D, P=P, H=H, use_object_detection=config.OBJECT_DETECTION
@@ -101,6 +102,7 @@ class SelfDrivingPipeline:
         return velocities[0], velocities[1], color_vis, bw_vis
 
     def _waypoints_drive(self) -> Optional[np.ndarray]:
+        self.last_avoidance_actions = None
         return self.world_model.get_drive_waypoints(
             right_white_boundary=self.perception.right_white_boundary,
             left_white_boundary=self.perception.left_white_boundary,
@@ -111,6 +113,7 @@ class SelfDrivingPipeline:
         )
 
     def _waypoints_cross(self) -> Optional[np.ndarray]:
+        self.last_avoidance_actions = None
         return self.world_model.get_drive_waypoints(
             right_white_boundary=self.perception.right_white_boundary,
             left_white_boundary=self.perception.left_white_boundary,
@@ -121,7 +124,8 @@ class SelfDrivingPipeline:
         )
 
     def _waypoints_follow(self) -> Optional[np.ndarray]:
-        return np.array([self.planner.get_intersection_waypoint()])
+        world_waypoints = np.array([self.planner.get_intersection_waypoint_world()])
+        return image_utils.world_to_image_coords(world_waypoints, self.perception.H)
 
     def _waypoints_duckie_avoid(self) -> Optional[np.ndarray]:
         """Drive waypoints offset sideways away from nearest duckie."""
@@ -137,11 +141,15 @@ class SelfDrivingPipeline:
             H_image_to_metric=self.perception.H,
             bev_cfg=self.bev_config,
         )
-        obstacle_avoidance_waypoints = cem_planner(cost_function=self.avoidance_cost_fn)
+        obstacle_avoidance_waypoints, elite_actions = cem_planner(
+            cost_function=self.avoidance_cost_fn,
+            last_elite_actions=self.last_avoidance_actions,
+        )
+        self.last_avoidance_actions = elite_actions
         waypoints_image = image_utils.world_to_image_coords(
             obstacle_avoidance_waypoints, self.perception.H
         )
-        return waypoints_image
+        return waypoints_image[1:]
 
     def _speed_drive(self, waypoints: Optional[np.ndarray]) -> Tuple[float, float]:
         """Normal lane-following: heading error → wheel speeds."""
@@ -159,6 +167,7 @@ class SelfDrivingPipeline:
         )
 
     def _speed_stop(self, waypoints: Optional[np.ndarray]) -> Tuple[float, float]:
+        self.controller.reset()
         return 0.0, 0.0
 
     def _speed_turn(self, waypoints: Optional[np.ndarray]) -> Tuple[float, float]:

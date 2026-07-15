@@ -211,7 +211,6 @@ def build_image_to_bev_homography(
     W = bev_cfg.bev_w_px
     H = bev_cfg.bev_h_px
 
-    # TODO: Check this magic matrix
     S = np.array(
         [
             [0.0, -1.0 / res, W / 2.0],  # u from y_m

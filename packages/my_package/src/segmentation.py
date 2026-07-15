@@ -24,12 +24,6 @@ COLORS = {
     4: (255, 0, 0),  # blue duckiebot
 }
 
-"""
-TODO: 
-1. change model
-2. use smaller image size
-"""
-
 
 class SEGModel:
     def __init__(self, num_classes=5):

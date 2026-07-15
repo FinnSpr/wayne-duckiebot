@@ -8,10 +8,11 @@ VIRTUAL = False
 ENHANCED_LANE_DETECTION = True
 OBJECT_DETECTION = False
 USE_SEGMENTATION = True
-SEGMENTATION_EDGE_DETECTION = True
+SEGMENTATION_EDGE_DETECTION = False
 USE_WHEEL_ODOMETRY = True
 USE_TWIST = True
-INTERSECTION_DECISIONS = ["straight"] * 5
+INTERSECTION_DECISIONS = ["straight"]
+
 
 ORIGINAL_IMAGE_SIZE = (640, 480)  # (width, height)
 
@@ -39,30 +40,30 @@ OD_CONF_THRESHOLD = 0.4
 # Segmentation Model
 SEG_MODEL_PATH = DATA_DIR / "seg_small_image.onnx"
 MODEL_INPUT_SIZE = (320, 256)  # (width, height)
-SEG_CONF_THRESHOLD = 0.25
+SEG_CONF_THRESHOLD = 0.4
 
 # Duckietown constants
 LANE_WIDTH = 0.28  # 28 cm
 TILE_WIDTH = 0.61  # 61 cm
 DUCKIE_RADIUS = 0.025  # 2.5 cm
-BOT_WIDTH = 0.1  # 10 cm
+BOT_WIDTH = 0.12  # 12 cm
 
 # Obstacle avoidance
 AVOIDANCE_START_ABSOLUTE_ROI = (TILE_WIDTH, BOT_WIDTH)  # (ahead, each side)
 WHEEL_TO_FRONT_OFFSET = 0.06  # 6 cm
 LANE_POLY_EPSILON = 5.0  # pixels
-AVOIDANCE_MARGIN = 0.06  # 6 cm, margin from obstacles for path planning
-LAMBDA_OBSTACLES = 10.0
+AVOIDANCE_MARGIN = 0.03  # 3 cm, margin from obstacles for path planning
+LAMBDA_OBSTACLES = 1000.0
 FREE_X_THRESHOLD = BOT_WIDTH / 2 + AVOIDANCE_MARGIN + 0.001
 PLANNING_WEIGHT_FINAL_POSITION = 5.0
 
 # CEM planning
 CEM_HORIZON = 5
-CEM_NUM_SAMPLES = 200
-CEM_NUM_ELITES = 20
+CEM_NUM_SAMPLES = 100
+CEM_NUM_ELITES = 10
 CEM_NUM_ITERATIONS = 3
-CEM_DT = 1.0  # seconds per one planning (big) step
-CEM_V_CONST = 0.1
+CEM_DT = 0.5  # seconds per one planning (big) step
+CEM_V_CONST = 0.2
 CEM_OMEGA_MEAN = 0.0
 CEM_OMEGA_STD = 1.0
 CEM_TEMPERATURE = 1.0  # for MPPI weighing
@@ -79,7 +80,7 @@ if VIRTUAL:
     HIDE_TOP_OF_IMAGE = 250
     CROSSING_OFFSET_LEFT = np.array([160, -350])
     CROSSING_OFFSET_RIGHT = np.array([200, -140])
-    MIN_AREA = 200
+    MIN_AREA_STOP_LINE = 200
     TOF_THRESHOLD = 0.2
 
     WHITE_HSV_LOWER = np.array([0, 0, 180])
@@ -119,7 +120,7 @@ else:
     HIDE_TOP_OF_IMAGE = 160
     CROSSING_OFFSET_LEFT = np.array([160, -300])
     CROSSING_OFFSET_RIGHT = np.array([150, -140])
-    MIN_AREA = 200
+    MIN_AREA_STOP_LINE = 100
     TOF_THRESHOLD = 0.0
 
     WHITE_HSV_LOWER = np.array([0, 0, 140])
@@ -148,7 +149,7 @@ else:
     # PID VALUES:
     KP = 6.0
     KI = 0.0
-    KD = 0.0
+    KD = 0.1
     MAX_OMEGA = 3.0
     INTEGRAL_LIMIT = 1.0
     PID_MAX_DT = 0.5
@@ -172,9 +173,9 @@ else:
     BASE_SPEED = 0.2
     STEERING_GAIN = 0.2
     CROSSING_OFFSET = {
-        "left": np.array([40, -230]),
-        "straight": np.array([100, 0]),
-        "right": np.array([80, 150]),
+        "left": np.array([0.55, 0.37]),
+        "straight": np.array([0.62, 0]),
+        "right": np.array([0.18, -0.12]),
     }
     CROSSING_OFFSET_LEFT = np.array([40, -230])
     CROSSING_OFFSET_RIGHT = np.array([80, 150])

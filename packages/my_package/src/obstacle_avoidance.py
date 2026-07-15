@@ -24,6 +24,7 @@ def cem_planner(
     temperature: float = config.CEM_TEMPERATURE,
     omega_clip: Tuple[float, float] = config.CEM_OMEGA_CLIP,
     action_repeat: int = config.CEM_ACTION_REPEAT,
+    last_elite_actions: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Cross-entropy method planner with MPPI-style elite weighting.
@@ -47,10 +48,12 @@ def cem_planner(
         action_repeat: Number of times each action is repeated with
             proportionally smaller dt for finer cost evaluation
             (1 = no repeat).
+        last_elite_actions: (num_elites, horizon) array of the last iteration's elite omegas.
 
     Returns:
-        (trajectory_positions, trajectory_actions) where
-        positions is (horizon, 2) and actions is (horizon, 2) [v, omega].
+        (trajectory_positions, elite_actions) where
+        positions is (horizon, 2) and elite_actions is (num_elites, horizon)
+        omega values from the final iteration.
     """
     start_pos = np.asarray(start_pos, dtype=np.float64)
     start_angles = np.full(num_samples, start_angle)  # (N,)
@@ -118,7 +121,7 @@ def cem_planner(
         omega_std = np.sqrt((w[:, None] * (elite_omega - omega_mean) ** 2).sum(axis=0))
         omega_std = np.maximum(omega_std, 1e-4)
 
-    return best_positions
+    return best_positions, elite_omega
 
 
 def get_trajectories_score(
