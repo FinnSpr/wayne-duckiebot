@@ -39,6 +39,53 @@ def draw_trajectory(
     return out
 
 
+def draw_trajectory_with_keypoints(
+    image: np.ndarray,
+    trajectory: np.ndarray,
+    keypoints: np.ndarray,
+    color: Tuple[int, int, int] = (0, 0, 0),
+    line_thickness: int = 2,
+    point_radius: int = 2,
+    keypoint_radius: int = 5,
+) -> np.ndarray:
+    """
+    Overlay a full trajectory with highlighted key waypoints.
+
+    Draws the complete trajectory as connected lines with small dots,
+    then overlays the key waypoints as larger dots.
+
+    Args:
+        image: (H, W, 3) uint8 BGR/RGB image.
+        trajectory: (N, 2) array of pixel coordinates (u, v) = (col, row)
+            for the full trajectory (including intermediate points).
+        keypoints: (M, 2) array of pixel coordinates for the key
+            waypoints to highlight (typically a subset of trajectory).
+        color: BGR tuple for the overlay (default black).
+        line_thickness: Thickness of the connecting lines.
+        point_radius: Radius of the trajectory dots.
+        keypoint_radius: Radius of the key waypoint dots.
+
+    Returns:
+        A new (H, W, 3) image with the trajectory drawn on it.
+    """
+    out = image.copy()
+    pts = np.atleast_2d(np.asarray(trajectory, dtype=np.int32))
+
+    # Draw lines and small dots for the full trajectory
+    if pts.shape[0] >= 2:
+        for i in range(len(pts) - 1):
+            cv2.line(out, tuple(pts[i]), tuple(pts[i + 1]), color, line_thickness)
+    for i in range(len(pts)):
+        cv2.circle(out, tuple(pts[i]), point_radius, color, -1)
+
+    # Draw larger dots for key waypoints
+    kpts = np.atleast_2d(np.asarray(keypoints, dtype=np.int32))
+    for i in range(len(kpts)):
+        cv2.circle(out, tuple(kpts[i]), keypoint_radius, color, -1)
+
+    return out
+
+
 class Visualizer:
     """
     Visualizer Module.

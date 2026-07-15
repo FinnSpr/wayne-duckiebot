@@ -328,12 +328,12 @@ def _build_drivable_polygon(
         (K, 1, 2) float32 contour for cv2.pointPolygonTest.
     """
     H = bev_cfg.bev_size[1]
-    half_W = bev_cfg.bev_size[0] / 2.0
+    W = bev_cfg.bev_size[0]
 
-    near_right = np.array([[0.0, -half_W]], dtype=np.float64)
-    far_right = np.array([[H, -half_W]], dtype=np.float64)
-    far_left = np.array([[H, half_W]], dtype=np.float64)
-    near_left = np.array([[0.0, half_W]], dtype=np.float64)
+    near_right = np.array([[0.0, -W]], dtype=np.float64)
+    far_right = np.array([[H * 2, -W]], dtype=np.float64)
+    far_left = np.array([[H * 2, W]], dtype=np.float64)
+    near_left = np.array([[0.0, W]], dtype=np.float64)
 
     parts = [near_right]
 

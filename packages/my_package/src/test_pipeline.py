@@ -150,10 +150,26 @@ def main() -> None:
 
         _, _, color_vis, bw_vis = pipeline.process(image, 0, 0)
 
-        for vis_dict in [color_vis, bw_vis]:
-            for name, img in vis_dict.items():
-                cv2.imshow(name, img)
+        out_dir = "./test_results"
+        os.makedirs(out_dir, exist_ok=True)
 
+        # Build and save composite
+        composite = _build_composite_frame(
+            color_vis, bw_vis, title=os.path.basename(image_paths[0])
+        )
+        if composite is not None:
+            cv2.imwrite(os.path.join(out_dir, "composite.png"), composite)
+
+        # Save individual visualisations
+        for vis_dict, prefix in [(color_vis, "color"), (bw_vis, "bw")]:
+            for name, img in vis_dict.items():
+                if img is not None:
+                    cv2.imwrite(
+                        os.path.join(out_dir, f"{prefix}_{name}.png"), img
+                    )
+                    cv2.imshow(name, img)
+
+        print(f"Visualisations saved → {os.path.abspath(out_dir)}")
         print("Press any key to close all windows...")
         cv2.waitKey(0)
         cv2.destroyAllWindows()
@@ -161,6 +177,9 @@ def main() -> None:
 
     # ------------------------------------------------------------------ directory → video
     video_path = os.path.join(path, "pipeline_output.mp4")
+
+    frames_dir = "./test_results/frames"
+    os.makedirs(frames_dir, exist_ok=True)
 
     # figure out cell size from first image
     first_img = cv2.imread(image_paths[0])
@@ -195,6 +214,9 @@ def main() -> None:
         )
         if composite is not None:
             writer.write(composite)
+            cv2.imwrite(
+                os.path.join(frames_dir, f"frame_{i:06d}.png"), composite
+            )
 
         print(
             f"  [{i + 1: >4}/{len(image_paths)}] {os.path.basename(img_path)}"
@@ -203,6 +225,7 @@ def main() -> None:
 
     writer.release()
     print(f"\nVideo saved → {video_path}")
+    print(f"Frames saved   → {os.path.abspath(frames_dir)}")
 
 
 if __name__ == "__main__":
